@@ -214,6 +214,11 @@ def cb_del_res(res_idx):
     if st.session_state.is_creating: st.session_state.temp_resources.pop(res_idx)
     else: st.session_state.zones[st.session_state.active_zone_idx].activities[st.session_state.active_act_idx].resources.pop(res_idx)
 
+def cb_new_activity():
+    st.session_state.active_act_idx = None
+    st.session_state.is_creating = False
+    st.session_state.ui_act_name = ""
+
 def cb_edit_activity(a_idx):
     st.session_state.active_act_idx = a_idx
     st.session_state.is_creating = False
@@ -246,6 +251,7 @@ def cb_new_zone():
     st.session_state.is_creating = False
     st.session_state.ui_zone_name = ""
     st.session_state.ui_grid_ref = ""
+    st.session_state.ui_act_name = ""
 
 def cb_complete_zone():
     st.session_state.active_zone_idx = None
@@ -372,7 +378,6 @@ with tab2:
         active_zone = st.session_state.zones[z_idx]
         st.success(f"📍 **Active Work Zone:** {active_zone.name} (Grid: {active_zone.grid_reference})")
         
-        # Only show Zone Edit inputs if not currently creating or editing an activity
         if not is_creating and a_idx is None:
             l_col1, l_col2, l_col3 = st.columns([2, 2, 1])
             l_col1.text_input("Edit Zone Name", key="ui_zone_name")
@@ -484,10 +489,11 @@ with tab2:
                         for res_i, res in enumerate(act.resources):
                             e_col1.write(f"&nbsp;&nbsp;**{res_i+1}.** {res.hours:,.2f} hrs of {res.resource_name}")
 
+        st.write("")
+        st.button("➕ Add Activity", on_click=cb_new_activity, use_container_width=True)
         st.divider()
-        c_zone_btn, n_zone_btn = st.columns(2)
-        c_zone_btn.button("➕ Add Zone", on_click=cb_new_zone, type="secondary", use_container_width=True)
-        n_zone_btn.button("✅ Complete Zone", on_click=cb_complete_zone, type="primary", use_container_width=True)
+        st.button("✅ Complete Zone", on_click=cb_complete_zone, type="primary", use_container_width=True)
+        st.button("🌍 Add Zone", on_click=cb_new_zone, type="secondary", use_container_width=True)
 
     # -----------------------------------------
     # 3. ZONE SUMMARY
@@ -537,32 +543,90 @@ with tab3:
         else:
             activity_schedules = []
             
-            h1, h2, h3 = st.columns([2, 1, 1])
+            # Build list of previously scheduled global tasks to allow cross-zone linking
+            global_preds = []
+            for t in st.session_state.tasks:
+                if not getattr(t, 'is_parent', False):
+                    global_preds.append((t.task_id, t.activity.name if t.activity else "Task"))
+            
+            h1, h2, h3, h4 = st.columns([3, 1.5, 2, 2])
             h1.markdown("**Activity Name (Auto ID)**")
             h2.markdown("**Duration (Days)**")
-            h3.markdown("**Start Date**")
+            h3.markdown("**Start Basis**")
+            h4.markdown("**Date / Lag (Days)**")
+            
+            current_zone_preds = []
             
             for idx, act in enumerate(selected_zone.activities):
-                c1, c2, c3 = st.columns([2, 1, 1])
+                c1, c2, c3, c4 = st.columns([3, 1.5, 2, 2])
                 child_id = f"{task_id}.{idx + 1}"
                 
                 c1.markdown(f"**{child_id}** | {act.name}")
-                dur = c2.number_input("Duration", min_value=1, value=5, key=f"dur_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                start_d = c3.date_input("Start Date", datetime.date.today(), key=f"start_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                dur = c2.number_input("Days", min_value=1, value=5, key=f"dur_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                
+                # Default to the immediate predecessor if it's not the first item
+                pred_choices = ["Manual Date"] + [p[0] for p in global_preds] + [p[0] for p in current_zone_preds]
+                default_idx = len(pred_choices) - 1 if idx > 0 else 0
+                
+                # Format the dropdown so it shows the ID + Name nicely
+                def format_pred(p_id):
+                    if p_id == "Manual Date": return "Manual Date"
+                    name = next((p[1] for p in current_zone_preds if p[0] == p_id), None)
+                    if not name:
+                        name = next((p[1] for p in global_preds if p[0] == p_id), "Task")
+                    short_name = (name[:15] + '..') if len(name) > 15 else name
+                    return f"After {p_id} ({short_name})"
+                
+                basis = c3.selectbox("Start Basis", pred_choices, index=default_idx, format_func=format_pred, key=f"basis_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                
+                start_d = None
+                offset = 0
+                
+                if basis == "Manual Date":
+                    start_d = c4.date_input("Start Date", datetime.date.today(), key=f"start_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                else:
+                    offset = c4.number_input("Lag (+) / Overlap (-)", value=0, step=1, key=f"offset_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                    c4.caption("*- overlap, + delay*")
                 
                 activity_schedules.append({
                     "id": child_id,
                     "act": act,
                     "dur": dur,
-                    "start": start_d
+                    "basis": basis,
+                    "start": start_d,
+                    "offset": offset
                 })
+                
+                current_zone_preds.append((child_id, act.name))
                 
             st.write("")
             if st.button("💾 Save Zone to Schedule", type="primary"):
                 child_tasks = []
+                
+                # Dictionary to track calculated end dates as we generate the WBS
+                end_dates = {t.task_id: t.end_date for t in st.session_state.tasks if not getattr(t, 'is_parent', False)}
+                
                 for sched in activity_schedules:
-                    ct = ProgrammeTask(sched["id"], selected_zone, sched["act"], sched["dur"], sched["start"], st.session_state.calendar, is_parent=False)
+                    basis = sched["basis"]
+                    
+                    if basis == "Manual Date":
+                        calc_start = sched["start"]
+                    else:
+                        pred_end = end_dates.get(basis, datetime.date.today())
+                        
+                        # Finish-to-Start default: Task starts 1 working day after predecessor finishes
+                        base_start = st.session_state.calendar.add_working_days(pred_end, 1)
+                        
+                        if sched["offset"] > 0:
+                            calc_start = st.session_state.calendar.add_working_days(base_start, sched["offset"])
+                        elif sched["offset"] < 0:
+                            calc_start = st.session_state.calendar.subtract_working_days(base_start, abs(sched["offset"]))
+                        else:
+                            calc_start = base_start
+                            
+                    ct = ProgrammeTask(sched["id"], selected_zone, sched["act"], sched["dur"], calc_start, st.session_state.calendar, is_parent=False)
                     child_tasks.append(ct)
+                    end_dates[ct.task_id] = ct.end_date # Add to dictionary so subsequent tasks can link to it
                     
                 if child_tasks:
                     parent_start = min(ct.start_date for ct in child_tasks)

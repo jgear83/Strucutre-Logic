@@ -120,7 +120,7 @@ class ProgrammeTask:
         self.start_date = start_date
         self.is_parent = is_parent
         
-        # Scheduling Meta-Data (Populated by the UI)
+        # Scheduling Meta-Data 
         self.link_type = "Manual Date"
         self.pred_id = None
         self.offset = 0
@@ -310,10 +310,9 @@ def cb_add_zone_to_wbs():
     current_start = datetime.date.today()
     child_tasks = []
     
-    # Find the very last child task in the schedule to automatically link to
     last_task_id = None
     for t in reversed(st.session_state.tasks):
-        if not t.is_parent:
+        if not getattr(t, 'is_parent', False):
             last_task_id = t.task_id
             break
             
@@ -321,7 +320,6 @@ def cb_add_zone_to_wbs():
         child_id = f"{task_id}.{idx + 1}"
         ct = ProgrammeTask(child_id, zone, act, 5, current_start, st.session_state.calendar, is_parent=False)
         
-        # Smart Default Links
         if idx == 0:
             if last_task_id:
                 ct.link_type = "Finish-to-Start (FS)"
@@ -338,7 +336,7 @@ def cb_add_zone_to_wbs():
     pt = ProgrammeTask(task_id, zone, None, 0, current_start, st.session_state.calendar, is_parent=True)
     st.session_state.tasks.append(pt)
     st.session_state.tasks.extend(child_tasks)
-    cb_update_schedule() # Automatically run math so defaults lock in
+    cb_update_schedule() 
 
 def cb_update_schedule():
     end_dates = {}
@@ -346,17 +344,16 @@ def cb_update_schedule():
     cal = st.session_state.calendar
     
     for t in st.session_state.tasks:
-        if t.is_parent: continue
+        if getattr(t, 'is_parent', False): continue
         
-        # Read from dynamic form memory
+        # Read from dynamic form with getattr safety nets for old cache data
         t.duration_days = st.session_state.get(f"dur_{t.task_id}", t.duration_days)
-        t.link_type = st.session_state.get(f"link_{t.task_id}", t.link_type)
-        t.pred_id = st.session_state.get(f"pred_{t.task_id}", t.pred_id)
-        t.offset = st.session_state.get(f"off_{t.task_id}", t.offset)
-        t.manual_start = st.session_state.get(f"start_{t.task_id}", t.manual_start)
+        t.link_type = st.session_state.get(f"link_{t.task_id}", getattr(t, 'link_type', 'Manual Date'))
+        t.pred_id = st.session_state.get(f"pred_{t.task_id}", getattr(t, 'pred_id', None))
+        t.offset = st.session_state.get(f"off_{t.task_id}", getattr(t, 'offset', 0))
+        t.manual_start = st.session_state.get(f"start_{t.task_id}", getattr(t, 'manual_start', t.start_date))
         
         if t.link_type == "Manual Date":
-            # Snap to a working day
             base = t.manual_start
             while not cal.is_working_day(base): base += datetime.timedelta(days=1)
             t.start_date = base
@@ -364,7 +361,7 @@ def cb_update_schedule():
         else:
             if t.link_type == "Finish-to-Start (FS)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
-                base_s = cal.shift_days(p_end, 1) # Start 1 day after pred finishes
+                base_s = cal.shift_days(p_end, 1) 
                 t.start_date = cal.shift_days(base_s, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
@@ -381,10 +378,9 @@ def cb_update_schedule():
         start_dates[t.task_id] = t.start_date
         end_dates[t.task_id] = t.end_date
         
-    # Update Parent Summaries
     for t in st.session_state.tasks:
-        if t.is_parent:
-            children = [ct for ct in st.session_state.tasks if not ct.is_parent and ct.task_id.startswith(f"{t.task_id}.")]
+        if getattr(t, 'is_parent', False):
+            children = [ct for ct in st.session_state.tasks if not getattr(ct, 'is_parent', False) and ct.task_id.startswith(f"{t.task_id}.")]
             if children:
                 t.start_date = min(c.start_date for c in children)
                 t.end_date = max(c.end_date for c in children)
@@ -634,10 +630,8 @@ with tab3:
         else:
             with st.form("dependencies_form"):
                 
-                # Build Predecessor Options (All non-parent tasks)
-                pred_opts = [t.task_id for t in st.session_state.tasks if not t.is_parent]
+                pred_opts = [t.task_id for t in st.session_state.tasks if not getattr(t, 'is_parent', False)]
                 
-                # Header Row
                 h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
                 h1.markdown("**Activity (ID)**")
                 h2.markdown("**Duration**")
@@ -647,7 +641,7 @@ with tab3:
                 h6.markdown("**Manual Date**")
                 
                 for t in st.session_state.tasks:
-                    if t.is_parent:
+                    if getattr(t, 'is_parent', False):
                         st.markdown(f"#### 📍 {t.task_id} | {t.zone.name}")
                     else:
                         c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
@@ -656,14 +650,21 @@ with tab3:
                         c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
                         
                         link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
-                        link_idx = link_opts.index(t.link_type) if t.link_type in link_opts else 0
+                        
+                        # SAFE GETATTR FOR OLD CACHE
+                        t_link = getattr(t, 'link_type', 'Manual Date')
+                        link_idx = link_opts.index(t_link) if t_link in link_opts else 0
                         c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
                         
-                        def_pred_idx = pred_opts.index(t.pred_id) if t.pred_id in pred_opts else 0
+                        t_pred = getattr(t, 'pred_id', None)
+                        def_pred_idx = pred_opts.index(t_pred) if t_pred in pred_opts else 0
                         c4.selectbox("Predecessor", pred_opts, index=def_pred_idx, key=f"pred_{t.task_id}", label_visibility="collapsed")
                         
-                        c5.number_input("Lag", value=t.offset, step=1, key=f"off_{t.task_id}", label_visibility="collapsed")
-                        c6.date_input("Start", t.manual_start, key=f"start_{t.task_id}", label_visibility="collapsed")
+                        t_off = getattr(t, 'offset', 0)
+                        c5.number_input("Lag", value=t_off, step=1, key=f"off_{t.task_id}", label_visibility="collapsed")
+                        
+                        t_manual = getattr(t, 'manual_start', t.start_date)
+                        c6.date_input("Start", t_manual, key=f"start_{t.task_id}", label_visibility="collapsed")
                         
                 st.write("")
                 st.form_submit_button("✅ Update Schedule", on_click=cb_update_schedule, type="primary", use_container_width=True)
@@ -672,9 +673,6 @@ with tab3:
         st.write("### 3. Current Schedule")
         
         if st.session_state.tasks:
-            # -----------------------------------------
-            # DATA FRAME TABLE VIEW
-            # -----------------------------------------
             sched_list = []
             for t in st.session_state.tasks:
                 start_str = t.start_date.strftime('%d/%m/%Y')
@@ -697,9 +695,6 @@ with tab3:
             
             st.dataframe(pd.DataFrame(sched_list), hide_index=True, use_container_width=True)
             
-            # -----------------------------------------
-            # TASK DELETION & MANAGEMENT
-            # -----------------------------------------
             st.write("#### Manage Schedule")
             del_c1, del_c2, del_c3 = st.columns([2, 1, 1])
             
@@ -723,9 +718,6 @@ with tab3:
 
             st.divider()
             
-            # -----------------------------------------
-            # PLOTLY GANTT CHART
-            # -----------------------------------------
             st.write("### Project Gantt Chart")
             gantt_data = []
             for t in st.session_state.tasks:
@@ -767,7 +759,6 @@ with tab4:
                 act_mat_cost = 0.0
                 act_res_cost = 0.0
                 
-                # 1. BOQ Data
                 for el in a.elements:
                     mat_name = getattr(el, 'material_name', None)
                     mat_rate = sor.get_mat_rate(mat_name) if mat_name and mat_name != "None" else 0.0
@@ -781,7 +772,6 @@ with tab4:
                         "Rate ($)": mat_rate, "Total Cost ($)": cost
                     })
                 
-                # 2. Resource Data
                 for res in a.resources:
                     res_rate = getattr(sor, 'get_res_rate', sor.get_rate)(res.resource_name)
                     cost = res.hours * res_rate
@@ -792,7 +782,6 @@ with tab4:
                         "Hours": res.hours, "Rate ($/hr)": res_rate, "Total Cost ($)": cost
                     })
                 
-                # 3. Cost Breakdown Data
                 act_total = act_mat_cost + act_res_cost
                 grand_total += act_total
                 cost_data.append({

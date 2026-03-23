@@ -429,7 +429,15 @@ with tab1:
                 
         st.info("💡 **Tip:** Click directly on any cell in the table below to **edit the rate**, or select a row and press `Delete` to remove it.")
         res_df = pd.DataFrame(list(st.session_state.resource_rates.items()), columns=["Resource Name", "Rate ($/hr)"])
-        edited_res = st.data_editor(res_df, num_rows="dynamic", use_container_width=True, key="res_edit")
+        edited_res = st.data_editor(
+            res_df, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            key="res_edit",
+            column_config={
+                "Rate ($/hr)": st.column_config.NumberColumn("Rate ($/hr)", format="%,.2f")
+            }
+        )
         
         updated_res = {}
         for _, row in edited_res.iterrows():
@@ -456,7 +464,16 @@ with tab1:
             else: mat_list.append({"Material Name": k, "Unit Rate ($)": float(v), "Unit": "ea"}) 
         
         mat_df = pd.DataFrame(mat_list)
-        edited_mat = st.data_editor(mat_df, num_rows="dynamic", use_container_width=True, key="mat_edit", column_config={"Unit": st.column_config.SelectboxColumn("Unit", options=["m2", "m3", "tonnes", "lm", "ea"])})
+        edited_mat = st.data_editor(
+            mat_df, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            key="mat_edit", 
+            column_config={
+                "Unit": st.column_config.SelectboxColumn("Unit", options=["m2", "m3", "tonnes", "lm", "ea"]),
+                "Unit Rate ($)": st.column_config.NumberColumn("Unit Rate ($)", format="%,.2f")
+            }
+        )
         
         updated_mat = {}
         for _, row in edited_mat.iterrows():
@@ -702,7 +719,7 @@ with tab3:
                 else:
                     sched_list.append({
                         "Zone / Activity": f"    └ {t.task_id} | {t.activity.name if t.activity else ''}",
-                        "Duration (Days)": str(t.duration_days),
+                        "Duration (Days)": f"{t.duration_days:,}", # Added comma format
                         "Start Date": start_str,
                         "End Date": end_str
                     })
@@ -842,7 +859,7 @@ with tab4:
                 "Zone": z.name,
                 "Total Labour (Hrs)": z_lab_hrs,
                 "Total Plant (Hrs)": z_plant_hrs,
-                "Schedule Duration (Working Days)": dur_days if z_task else "Not Scheduled",
+                "Schedule Duration (Working Days)": dur_days if z_task else None,
                 "Start Date": z_task.start_date.strftime('%d/%m/%Y') if z_task else "-",
                 "End Date": z_task.end_date.strftime('%d/%m/%Y') if z_task else "-"
             })
@@ -914,30 +931,47 @@ with tab4:
             df_plant = pd.DataFrame(plant_data)
 
         # ----------------------------------------------------
-        # UI RENDER (Expanders)
+        # UI RENDER (Expanders with Visual Comma Formatting)
         # ----------------------------------------------------
+        
+        # Centralized visual formatting dictionary for DataFrames
+        master_formatting = {
+            "Quantity": st.column_config.NumberColumn("Quantity", format="%,.2f"),
+            "Rate ($)": st.column_config.NumberColumn("Rate ($)", format="$%,.2f"),
+            "Total Cost ($)": st.column_config.NumberColumn("Total Cost ($)", format="$%,.2f"),
+            "Hours": st.column_config.NumberColumn("Hours", format="%,.2f"),
+            "Rate ($/hr)": st.column_config.NumberColumn("Rate ($/hr)", format="$%,.2f"),
+            "Material Cost ($)": st.column_config.NumberColumn("Material Cost ($)", format="$%,.2f"),
+            "Resource Cost ($)": st.column_config.NumberColumn("Resource Cost ($)", format="$%,.2f"),
+            "Activity Total ($)": st.column_config.NumberColumn("Activity Total ($)", format="$%,.2f"),
+            "Total Labour (Hrs)": st.column_config.NumberColumn("Total Labour (Hrs)", format="%,.2f"),
+            "Total Plant (Hrs)": st.column_config.NumberColumn("Total Plant (Hrs)", format="%,.2f"),
+            "Schedule Duration (Working Days)": st.column_config.NumberColumn("Schedule Duration (Working Days)", format="%,.0f"),
+            "Total Quantity / Hrs": st.column_config.NumberColumn("Total Quantity / Hrs", format="%,.2f")
+        }
+
         with st.expander("1. Detailed Bill of Quantities", expanded=True):
-            st.dataframe(df_boq, use_container_width=True, hide_index=True)
+            st.dataframe(df_boq, use_container_width=True, hide_index=True, column_config=master_formatting)
             
         with st.expander("2. Detailed Labour Schedule"):
-            if not df_lab.empty: st.dataframe(df_lab, use_container_width=True, hide_index=True)
+            if not df_lab.empty: st.dataframe(df_lab, use_container_width=True, hide_index=True, column_config=master_formatting)
             else: st.info("No labour resources added.")
             
         with st.expander("3. Detailed Plant Schedule"):
-            if not df_plant.empty: st.dataframe(df_plant, use_container_width=True, hide_index=True)
+            if not df_plant.empty: st.dataframe(df_plant, use_container_width=True, hide_index=True, column_config=master_formatting)
             else: st.info("No plant resources added.")
             
         with st.expander("4. Zone Summary (Hours & Duration)"):
-            st.dataframe(df_zone_metrics, use_container_width=True, hide_index=True)
+            st.dataframe(df_zone_metrics, use_container_width=True, hide_index=True, column_config=master_formatting)
             
         with st.expander("5. Master Schedule of Quantities & Resources (Combined Totals)"):
             if not df_unified.empty:
-                st.dataframe(df_unified, use_container_width=True, hide_index=True)
+                st.dataframe(df_unified, use_container_width=True, hide_index=True, column_config=master_formatting)
             else:
                 st.info("No materials or resources have been added to the project yet.")
             
         with st.expander("6. Cost Breakdown (Activity / Zone)"):
-            st.dataframe(df_cost, use_container_width=True, hide_index=True)
+            st.dataframe(df_cost, use_container_width=True, hide_index=True, column_config=master_formatting)
             st.metric("Total Project Cost", f"${grand_total:,.2f}")
         
         st.divider()

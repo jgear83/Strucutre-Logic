@@ -506,7 +506,6 @@ with tab2:
                 resources_source = active_act.resources
             
             with st.container(border=True):
-                # ----------------- QUANTITIES -----------------
                 st.write("**Nominate Quantities**")
                 q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns([2.5, 1, 1, 1.5, 2])
                 q_col1.text_input("Work Element", key="ui_elem_name", placeholder="e.g., Formwork", label_visibility="collapsed")
@@ -525,8 +524,6 @@ with tab2:
                         c2.button("🗑️", key=f"del_q_live_{el_i}", on_click=cb_del_qty, args=(el_i,))
 
                 st.divider()
-                
-                # ----------------- RESOURCES -----------------
                 st.write("**Assign Resources**")
                 if not st.session_state.resource_rates:
                     st.warning("Go to Tab 1 to add Resource Rates first.")
@@ -755,6 +752,7 @@ with tab4:
         
         sor = ScheduleOfRates(st.session_state.resource_rates, st.session_state.material_rates)
         
+        # Build Raw Data Arrays
         for z in st.session_state.zones:
             for a in z.activities:
                 act_mat_cost = 0.0
@@ -814,12 +812,10 @@ with tab4:
             z_lab_hrs = sum(res.hours for a in z.activities for res in a.resources if getattr(res, 'is_labour', True))
             z_plant_hrs = sum(res.hours for a in z.activities for res in a.resources if not getattr(res, 'is_labour', True))
             
-            # Find the parent task in the schedule to grab dynamic dates
             z_task = next((t for t in st.session_state.tasks if getattr(t, 'is_parent', False) and t.zone == z), None)
             
             dur_days = 0
             if z_task:
-                # Count actual working days between start and end
                 curr = z_task.start_date
                 while curr <= z_task.end_date:
                     if cal.is_working_day(curr): dur_days += 1
@@ -836,18 +832,61 @@ with tab4:
         df_zone_metrics = pd.DataFrame(zone_metrics)
 
         # ----------------------------------------------------
-        # NEW: COMBINED TOTALS SUMMARY
+        # NEW: COMBINED MASTER SCHEDULE OF TOTALS
         # ----------------------------------------------------
-        mat_totals = df_boq.groupby(["Element", "Unit"]).agg({"Quantity": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_boq.empty else pd.DataFrame()
-        lab_totals = df_lab.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_lab.empty else pd.DataFrame()
-        plant_totals = df_plant.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_plant.empty else pd.DataFrame()
+        unified_data = []
+        
+        if not df_boq.empty:
+            mat_grp = df_boq.groupby(["Element", "Unit"]).agg({"Quantity": "sum", "Total Cost ($)": "sum"}).reset_index()
+            for _, row in mat_grp.iterrows():
+                unified_data.append({
+                    "Category": "Material", 
+                    "Item / Resource Name": row["Element"], 
+                    "Total Quantity / Hrs": row["Quantity"], 
+                    "Unit": row["Unit"], 
+                    "Total Cost ($)": row["Total Cost ($)"]
+                })
+                
+        if not df_lab.empty:
+            lab_grp = df_lab.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index()
+            for _, row in lab_grp.iterrows():
+                unified_data.append({
+                    "Category": "Labour", 
+                    "Item / Resource Name": row["Resource"], 
+                    "Total Quantity / Hrs": row["Hours"], 
+                    "Unit": "hrs", 
+                    "Total Cost ($)": row["Total Cost ($)"]
+                })
+                
+        if not df_plant.empty:
+            plant_grp = df_plant.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index()
+            for _, row in plant_grp.iterrows():
+                unified_data.append({
+                    "Category": "Plant", 
+                    "Item / Resource Name": row["Resource"], 
+                    "Total Quantity / Hrs": row["Hours"], 
+                    "Unit": "hrs", 
+                    "Total Cost ($)": row["Total Cost ($)"]
+                })
+                
+        df_unified = pd.DataFrame(unified_data)
+        
+        if not df_unified.empty:
+            # Append Grand Total to the Unified Table
+            df_unified.loc[len(df_unified.index)] = {
+                "Category": "**GRAND TOTAL**", 
+                "Item / Resource Name": "-", 
+                "Total Quantity / Hrs": None, 
+                "Unit": "-", 
+                "Total Cost ($)": df_unified["Total Cost ($)"].sum()
+            }
 
         # ----------------------------------------------------
         # ADD TOTAL ROWS TO CORE SCHEDULES
         # ----------------------------------------------------
         if not df_boq.empty:
             boq_data.append({"Zone": "**TOTAL**", "Activity": "-", "Element": "-", "Quantity": None, "Unit": "-", "Material Link": "-", "Rate ($)": None, "Total Cost ($)": df_boq["Total Cost ($)"].sum()})
-            df_boq = pd.DataFrame(boq_data) # Rebuild to include total row cleanly
+            df_boq = pd.DataFrame(boq_data) 
             
         if not df_lab.empty:
             lab_data.append({"Zone": "**TOTAL**", "Activity": "-", "Resource": "-", "Hours": df_lab["Hours"].sum(), "Rate ($/hr)": None, "Total Cost ($)": df_lab["Total Cost ($)"].sum()})
@@ -874,19 +913,11 @@ with tab4:
         with st.expander("4. Zone Summary (Hours & Duration)"):
             st.dataframe(df_zone_metrics, use_container_width=True, hide_index=True)
             
-        with st.expander("5. Combined Totals (Materials, Labour, Plant)"):
-            c1, c2, c3 = st.columns(3)
-            c1.write("**Total Materials**")
-            if not mat_totals.empty: c1.dataframe(mat_totals, use_container_width=True, hide_index=True)
-            else: c1.caption("No materials")
-            
-            c2.write("**Total Labour**")
-            if not lab_totals.empty: c2.dataframe(lab_totals, use_container_width=True, hide_index=True)
-            else: c2.caption("No labour")
-            
-            c3.write("**Total Plant**")
-            if not plant_totals.empty: c3.dataframe(plant_totals, use_container_width=True, hide_index=True)
-            else: c3.caption("No plant")
+        with st.expander("5. Master Schedule of Quantities & Resources (Combined Totals)"):
+            if not df_unified.empty:
+                st.dataframe(df_unified, use_container_width=True, hide_index=True)
+            else:
+                st.info("No materials or resources have been added to the project yet.")
             
         with st.expander("6. Cost Breakdown (Activity / Zone)"):
             st.dataframe(df_cost, use_container_width=True, hide_index=True)
@@ -903,15 +934,18 @@ with tab4:
         
         if not df_boq.empty:
             d_col1.download_button(label="Download BOQ", data=df_boq.to_csv(index=False).encode('utf-8'), file_name="BOQ.csv", mime="text/csv", use_container_width=True)
-            if not mat_totals.empty:
-                d_col4.download_button(label="Download Combined Materials", data=mat_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Materials.csv", mime="text/csv", use_container_width=True)
-            
+        
         if not df_lab.empty:
             d_col2.download_button(label="Download Labour Schedule", data=df_lab.to_csv(index=False).encode('utf-8'), file_name="Labour_Schedule.csv", mime="text/csv", use_container_width=True)
-            if not lab_totals.empty:
-                d_col5.download_button(label="Download Combined Labour", data=lab_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Labour.csv", mime="text/csv", use_container_width=True)
             
         if not df_plant.empty:
             d_col3.download_button(label="Download Plant Schedule", data=df_plant.to_csv(index=False).encode('utf-8'), file_name="Plant_Schedule.csv", mime="text/csv", use_container_width=True)
-            if not plant_totals.empty:
-                d_col6.download_button(label="Download Combined Plant", data=plant_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Plant.csv", mime="text/csv", use_container_width=True)
+            
+        if not df_unified.empty:
+            d_col4.download_button(label="Download Master Totals Schedule", data=df_unified.to_csv(index=False).encode('utf-8'), file_name="Master_Totals_Schedule.csv", mime="text/csv", use_container_width=True)
+            
+        if not df_zone_metrics.empty:
+            d_col5.download_button(label="Download Zone Summary", data=df_zone_metrics.to_csv(index=False).encode('utf-8'), file_name="Zone_Summary.csv", mime="text/csv", use_container_width=True)
+            
+        if not df_cost.empty:
+            d_col6.download_button(label="Download Cost Breakdown", data=df_cost.to_csv(index=False).encode('utf-8'), file_name="Cost_Breakdown.csv", mime="text/csv", use_container_width=True)

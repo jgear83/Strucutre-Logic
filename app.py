@@ -47,6 +47,7 @@ class WorkingDayCalendar:
         return current_date
 
     def shift_days(self, from_date, offset_days):
+        """Shifts a date strictly forward or backward by X working days (for Lag/Overlap & FS Links)"""
         if offset_days == 0: return from_date
         current = from_date
         if offset_days > 0:
@@ -320,6 +321,7 @@ def cb_add_zone_to_wbs():
         child_id = f"{task_id}.{idx + 1}"
         ct = ProgrammeTask(child_id, zone, act, 5, current_start, st.session_state.calendar, is_parent=False)
         
+        # Smart Default Links
         if idx == 0:
             if last_task_id:
                 ct.link_type = "Finish-to-Start (FS)"
@@ -361,17 +363,20 @@ def cb_update_schedule():
         else:
             if t.link_type == "Finish-to-Start (FS)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
+                # FS Starts 1 working day strictly AFTER predecessor finishes
                 base_s = cal.shift_days(p_end, 1) 
                 t.start_date = cal.shift_days(base_s, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Start-to-Start (SS)":
                 p_start = start_dates.get(t.pred_id, datetime.date.today())
+                # SS Starts on EXACT same working day as predecessor starts
                 t.start_date = cal.shift_days(p_start, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Finish-to-Finish (FF)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
+                # FF Finishes on EXACT same working day as predecessor finishes
                 t.end_date = cal.shift_days(p_end, t.offset)
                 t.start_date = cal.subtract_working_days(t.end_date, t.duration_days)
                 
@@ -623,56 +628,62 @@ with tab3:
         
         st.divider()
         st.subheader("2. Assign Dependencies")
-        st.write("Edit durations, link types, and offset dates for all scheduled activities. Click **Update Schedule** to apply changes.")
+        st.write("Edit durations, link types, and offset dates for all scheduled activities. Changes update instantly, or click **Update Schedule** to force a refresh.")
         
         if not st.session_state.tasks:
             st.info("Add a Zone to the WBS above to begin scheduling.")
         else:
-            with st.form("dependencies_form"):
-                
-                pred_opts = [t.task_id for t in st.session_state.tasks if not getattr(t, 'is_parent', False)]
-                
-                h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
-                h1.markdown("**Activity (ID)**")
-                h2.markdown("**Duration**")
-                h3.markdown("**Link Type**")
-                h4.markdown("**Predecessor**")
-                h5.markdown("**Lag / Overlap**")
-                h6.markdown("**Manual Date**")
-                
-                for t in st.session_state.tasks:
-                    if getattr(t, 'is_parent', False):
-                        st.markdown(f"#### 📍 {t.task_id} | {t.zone.name}")
-                    else:
-                        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
-                        c1.write(f"└ **{t.task_id}** {t.activity.name}")
-                        
-                        c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
-                        
-                        link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
-                        
-                        # SAFE GETATTR FOR OLD CACHE
-                        t_link = getattr(t, 'link_type', 'Manual Date')
-                        link_idx = link_opts.index(t_link) if t_link in link_opts else 0
-                        c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
-                        
-                        t_pred = getattr(t, 'pred_id', None)
-                        def_pred_idx = pred_opts.index(t_pred) if t_pred in pred_opts else 0
-                        c4.selectbox("Predecessor", pred_opts, index=def_pred_idx, key=f"pred_{t.task_id}", label_visibility="collapsed")
-                        
-                        t_off = getattr(t, 'offset', 0)
-                        c5.number_input("Lag", value=t_off, step=1, key=f"off_{t.task_id}", label_visibility="collapsed")
-                        
-                        t_manual = getattr(t, 'manual_start', t.start_date)
-                        c6.date_input("Start", t_manual, key=f"start_{t.task_id}", label_visibility="collapsed")
-                        
-                st.write("")
-                st.form_submit_button("✅ Update Schedule", on_click=cb_update_schedule, type="primary", use_container_width=True)
+            pred_opts = [t.task_id for t in st.session_state.tasks if not getattr(t, 'is_parent', False)]
+            
+            h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
+            h1.markdown("**Activity (ID)**")
+            h2.markdown("**Duration**")
+            h3.markdown("**Link Type**")
+            h4.markdown("**Predecessor**")
+            h5.markdown("**Lag / Overlap**")
+            h6.markdown("**Manual Date**")
+            
+            for t in st.session_state.tasks:
+                if getattr(t, 'is_parent', False):
+                    st.markdown(f"#### 📍 {t.task_id} | {t.zone.name}")
+                else:
+                    c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
+                    c1.write(f"└ **{t.task_id}** {t.activity.name}")
+                    
+                    c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
+                    
+                    link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
+                    
+                    # Fetch link type from memory, default to safe fallback for old tasks
+                    t_link = st.session_state.get(f"link_{t.task_id}", getattr(t, 'link_type', 'Manual Date'))
+                    link_idx = link_opts.index(t_link) if t_link in link_opts else 0
+                    
+                    # The selectbox will instantly update session_state and rerun the app when changed
+                    c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
+                    
+                    # Greying out logic
+                    is_manual = (t_link == "Manual Date")
+                    
+                    t_pred = getattr(t, 'pred_id', None)
+                    def_pred_idx = pred_opts.index(t_pred) if t_pred in pred_opts else 0
+                    c4.selectbox("Predecessor", pred_opts, index=def_pred_idx, key=f"pred_{t.task_id}", label_visibility="collapsed", disabled=is_manual)
+                    
+                    t_off = getattr(t, 'offset', 0)
+                    c5.number_input("Lag", value=t_off, step=1, key=f"off_{t.task_id}", label_visibility="collapsed", disabled=is_manual)
+                    
+                    t_manual = getattr(t, 'manual_start', t.start_date)
+                    c6.date_input("Start", t_manual, key=f"start_{t.task_id}", label_visibility="collapsed", disabled=not is_manual)
+                    
+            st.write("")
+            st.button("✅ Update Schedule", on_click=cb_update_schedule, type="primary", use_container_width=True)
 
         st.divider()
         st.write("### 3. Current Schedule")
         
         if st.session_state.tasks:
+            # -----------------------------------------
+            # DATA FRAME TABLE VIEW
+            # -----------------------------------------
             sched_list = []
             for t in st.session_state.tasks:
                 start_str = t.start_date.strftime('%d/%m/%Y')
@@ -695,6 +706,9 @@ with tab3:
             
             st.dataframe(pd.DataFrame(sched_list), hide_index=True, use_container_width=True)
             
+            # -----------------------------------------
+            # TASK DELETION & MANAGEMENT
+            # -----------------------------------------
             st.write("#### Manage Schedule")
             del_c1, del_c2, del_c3 = st.columns([2, 1, 1])
             
@@ -718,6 +732,9 @@ with tab3:
 
             st.divider()
             
+            # -----------------------------------------
+            # PLOTLY GANTT CHART
+            # -----------------------------------------
             st.write("### Project Gantt Chart")
             gantt_data = []
             for t in st.session_state.tasks:
@@ -759,6 +776,7 @@ with tab4:
                 act_mat_cost = 0.0
                 act_res_cost = 0.0
                 
+                # 1. BOQ Data
                 for el in a.elements:
                     mat_name = getattr(el, 'material_name', None)
                     mat_rate = sor.get_mat_rate(mat_name) if mat_name and mat_name != "None" else 0.0
@@ -772,6 +790,7 @@ with tab4:
                         "Rate ($)": mat_rate, "Total Cost ($)": cost
                     })
                 
+                # 2. Resource Data
                 for res in a.resources:
                     res_rate = getattr(sor, 'get_res_rate', sor.get_rate)(res.resource_name)
                     cost = res.hours * res_rate
@@ -782,6 +801,7 @@ with tab4:
                         "Hours": res.hours, "Rate ($/hr)": res_rate, "Total Cost ($)": cost
                     })
                 
+                # 3. Cost Breakdown Data
                 act_total = act_mat_cost + act_res_cost
                 grand_total += act_total
                 cost_data.append({

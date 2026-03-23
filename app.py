@@ -47,7 +47,7 @@ class WorkingDayCalendar:
         return current_date
 
     def shift_days(self, from_date, offset_days):
-        """Shifts a date strictly forward or backward by X working days (for Lag/Overlap & FS Links)"""
+        """Shifts a date strictly forward or backward by X working days"""
         if offset_days == 0: return from_date
         current = from_date
         if offset_days > 0:
@@ -154,8 +154,20 @@ st.set_page_config(page_title="Pricing Engine", layout="wide")
 if 'resource_rates' not in st.session_state: st.session_state.resource_rates = {} 
 if 'material_rates' not in st.session_state: st.session_state.material_rates = {} 
 if 'zones' not in st.session_state: st.session_state.zones = [] 
-if 'tasks' not in st.session_state: st.session_state.tasks = [] 
 if 'calendar' not in st.session_state: st.session_state.calendar = WorkingDayCalendar(hours_per_week=60)
+
+# Memory init + CRASH RECOVERY for Duplicate Element Keys
+if 'tasks' not in st.session_state: 
+    st.session_state.tasks = [] 
+else:
+    # Failsafe: Clean up any corrupted duplicate IDs from a previous crash session
+    seen_ids = set()
+    for t in st.session_state.tasks:
+        if t.task_id in seen_ids:
+            count = 1
+            while f"{t.task_id}_dup{count}" in seen_ids: count += 1
+            t.task_id = f"{t.task_id}_dup{count}"
+        seen_ids.add(t.task_id)
 
 if 'active_zone_idx' not in st.session_state: st.session_state.active_zone_idx = None
 if 'active_act_idx' not in st.session_state: st.session_state.active_act_idx = None
@@ -311,9 +323,18 @@ def cb_delete_zone(z_idx):
 # --- WBS SCHEDULING ENGINE ---
 def cb_add_zone_to_wbs():
     zone_key = st.session_state.ui_schedule_zone
-    task_id = st.session_state.ui_schedule_id
+    base_task_id = st.session_state.ui_schedule_id.strip()
     zone = next((z for z in st.session_state.zones if f"{z.name} (Grid: {z.grid_reference})" == zone_key), None)
     if not zone: return
+    
+    # 1. Enforce strict uniqueness to prevent StreamlitDuplicateElementKey crash
+    task_id = base_task_id
+    existing_ids = [str(t.task_id) for t in st.session_state.tasks]
+    if task_id in existing_ids:
+        counter = 1
+        while f"{base_task_id}_{counter}" in existing_ids:
+            counter += 1
+        task_id = f"{base_task_id}_{counter}"
     
     current_start = datetime.date.today()
     child_tasks = []
@@ -645,8 +666,13 @@ with tab3:
         l_col1, l_col2, l_col3 = st.columns([3, 1, 1])
         l_col1.selectbox("Select Zone", list(zone_options.keys()), key="ui_schedule_zone")
         
-        parent_count = sum(1 for t in st.session_state.tasks if getattr(t, 'is_parent', False))
-        suggested_id = f"T{parent_count + 1:02d}"
+        # Safely find the next available sequential ID to prevent duplicates
+        existing_parent_ids = [t.task_id for t in st.session_state.tasks if getattr(t, 'is_parent', False)]
+        next_num = 1
+        while f"T{next_num:02d}" in existing_parent_ids:
+            next_num += 1
+        suggested_id = f"T{next_num:02d}"
+        
         l_col2.text_input("Parent Task ID", value=suggested_id, key="ui_schedule_id")
         
         l_col3.write("")
@@ -676,6 +702,7 @@ with tab3:
                     c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
                     c1.write(f"└ **{t.task_id}** {t.activity.name}")
                     
+                    # Uses guaranteed unique t.task_id as keys
                     c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
                     
                     link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
@@ -719,7 +746,7 @@ with tab3:
                 else:
                     sched_list.append({
                         "Zone / Activity": f"    └ {t.task_id} | {t.activity.name if t.activity else ''}",
-                        "Duration (Days)": f"{t.duration_days:,}", # Added comma format
+                        "Duration (Days)": f"{t.duration_days:,}", 
                         "Start Date": start_str,
                         "End Date": end_str
                     })

@@ -163,7 +163,7 @@ if 'is_creating' not in st.session_state: st.session_state.is_creating = False
 
 for key in ['temp_act_name', 'ui_zone_name', 'ui_grid_ref', 'ui_act_name', 'ui_elem_name']:
     if key not in st.session_state: st.session_state[key] = ""
-for key in ['ui_elem_qty', 'ui_res_hours_overall']:
+for key in ['ui_elem_qty', 'ui_res_hours_overall', 'ui_res_hrs_per']:
     if key not in st.session_state: st.session_state[key] = 0.0
     
 if 'temp_elements' not in st.session_state: st.session_state.temp_elements = []
@@ -220,13 +220,20 @@ def cb_add_res():
     if st.session_state.resource_rates:
         name = st.session_state.ui_res_name
         is_lab = (st.session_state.ui_res_type == "Labour")
-        total_hours = st.session_state.ui_res_hours_overall
+        
+        if st.session_state.ui_alloc_method == "Overall Hours": 
+            total_hours = st.session_state.ui_res_hours_overall
+        else: 
+            total_hours = st.session_state.ui_res_qty * st.session_state.ui_res_hrs_per
+            
         if total_hours > 0:
             new_res = ResourceAllocation(name, total_hours, is_labour=is_lab)
             if st.session_state.is_creating: st.session_state.temp_resources.append(new_res)
             elif st.session_state.active_act_idx is not None:
                 st.session_state.zones[st.session_state.active_zone_idx].activities[st.session_state.active_act_idx].add_resource(new_res)
             st.session_state.ui_res_hours_overall = 0.0
+            st.session_state.ui_res_qty = 1
+            st.session_state.ui_res_hrs_per = 0.0
 
 def cb_del_qty(el_idx):
     if st.session_state.is_creating: st.session_state.temp_elements.pop(el_idx)
@@ -506,6 +513,7 @@ with tab2:
                 resources_source = active_act.resources
             
             with st.container(border=True):
+                # ----------------- QUANTITIES -----------------
                 st.write("**Nominate Quantities**")
                 q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns([2.5, 1, 1, 1.5, 2])
                 q_col1.text_input("Work Element", key="ui_elem_name", placeholder="e.g., Formwork", label_visibility="collapsed")
@@ -524,16 +532,25 @@ with tab2:
                         c2.button("🗑️", key=f"del_q_live_{el_i}", on_click=cb_del_qty, args=(el_i,))
 
                 st.divider()
+                
+                # ----------------- RESOURCES -----------------
                 st.write("**Assign Resources**")
                 if not st.session_state.resource_rates:
                     st.warning("Go to Tab 1 to add Resource Rates first.")
                 else:
-                    r_col1, r_col2, r_col3, r_col4 = st.columns([2.5, 1.5, 1.5, 2])
+                    st.radio("Allocation Method", ["Overall Hours", "Resource Multiplier"], horizontal=True, key="ui_alloc_method", label_visibility="collapsed")
+                    r_col1, r_col2 = st.columns([2, 1])
                     r_col1.selectbox("Select Resource", list(st.session_state.resource_rates.keys()), key="ui_res_name")
                     r_col2.selectbox("Type", ["Labour", "Plant"], key="ui_res_type")
-                    r_col3.number_input("Total Hours", min_value=0.0, key="ui_res_hours_overall")
-                    r_col4.write("")
-                    r_col4.button("Add Resource", on_click=cb_add_res, use_container_width=True)
+                    
+                    rm_col1, rm_col2, rm_col3 = st.columns([3, 3, 2])
+                    if st.session_state.ui_alloc_method == "Overall Hours":
+                        rm_col1.number_input("Total Hours", key="ui_res_hours_overall", min_value=0.0)
+                    else:
+                        rm_col1.number_input("Workers/Plant (Qty)", key="ui_res_qty", min_value=1, step=1)
+                        rm_col2.number_input("Hours per unit", key="ui_res_hrs_per", min_value=0.0)
+                        
+                    st.button("Add Resource", on_click=cb_add_res)
 
                 if resources_source:
                     for res_i, res in enumerate(resources_source):

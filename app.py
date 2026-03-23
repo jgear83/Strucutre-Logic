@@ -14,26 +14,56 @@ class WorkingDayCalendar:
         self.holidays = set(holidays) if holidays else set()
 
     def is_working_day(self, date_obj):
-        if date_obj.weekday() == 6: return False
+        if date_obj.weekday() == 6: return False # 6 is Sunday
         if date_obj in self.holidays: return False
         return True
 
     def add_working_days(self, start_date, days):
+        """Adds duration days inclusive of the start date."""
+        if days <= 0: return start_date
         current_date = start_date
-        while not self.is_working_day(current_date): current_date += datetime.timedelta(days=1)
-        days_added = 0
-        while days_added < days - 1:
+        
+        # Snap to the next valid working day if starting on a weekend/holiday
+        while not self.is_working_day(current_date):
             current_date += datetime.timedelta(days=1)
-            if self.is_working_day(current_date): days_added += 1
+            
+        days_added = 1
+        while days_added < days:
+            current_date += datetime.timedelta(days=1)
+            if self.is_working_day(current_date): 
+                days_added += 1
         return current_date
 
     def subtract_working_days(self, from_date, days):
+        """Subtracts duration days inclusive of the end date (useful for FF links)."""
+        if days <= 0: return from_date
         current_date = from_date
-        days_subtracted = 0
+        
+        while not self.is_working_day(current_date):
+            current_date -= datetime.timedelta(days=1)
+            
+        days_subtracted = 1
         while days_subtracted < days:
             current_date -= datetime.timedelta(days=1)
-            if self.is_working_day(current_date): days_subtracted += 1
+            if self.is_working_day(current_date): 
+                days_subtracted += 1
         return current_date
+
+    def shift_days(self, from_date, offset_days):
+        """Shifts a date forward or backward by X working days strictly (for Lag/Overlap)."""
+        if offset_days == 0: return from_date
+        current = from_date
+        if offset_days > 0:
+            added = 0
+            while added < offset_days:
+                current += datetime.timedelta(days=1)
+                if self.is_working_day(current): added += 1
+        else:
+            subbed = 0
+            while subbed < abs(offset_days):
+                current -= datetime.timedelta(days=1)
+                if self.is_working_day(current): subbed += 1
+        return current
 
 class ScheduleOfRates:
     def __init__(self, resource_rates, material_rates): 
@@ -96,6 +126,7 @@ class ProgrammeTask:
         self.start_date = start_date
         self.is_parent = is_parent
         
+        # Calculate standard end date (can be manually overwritten later for FF links)
         if duration_days > 0:
             self.end_date = calendar.add_working_days(self.start_date, self.duration_days)
         else:
@@ -136,10 +167,8 @@ if 'temp_resources' not in st.session_state: st.session_state.temp_resources = [
 
 for key in ['ui_zone_name', 'ui_grid_ref', 'ui_act_name', 'ui_elem_name']:
     if key not in st.session_state: st.session_state[key] = ""
-for key in ['ui_elem_qty', 'ui_res_hours_overall', 'ui_res_hrs_per']:
+for key in ['ui_elem_qty', 'ui_res_hours_overall']:
     if key not in st.session_state: st.session_state[key] = 0.0
-if 'ui_res_qty' not in st.session_state: st.session_state.ui_res_qty = 1
-if 'ui_alloc_method' not in st.session_state: st.session_state.ui_alloc_method = "Overall Hours"
 if 'ui_res_type' not in st.session_state: st.session_state.ui_res_type = "Labour"
 
 # ==========================================
@@ -193,9 +222,8 @@ def cb_add_res():
     if st.session_state.resource_rates:
         name = st.session_state.ui_res_name
         is_lab = (st.session_state.ui_res_type == "Labour")
+        total_hours = st.session_state.ui_res_hours_overall
         
-        if st.session_state.ui_alloc_method == "Overall Hours": total_hours = st.session_state.ui_res_hours_overall
-        else: total_hours = st.session_state.ui_res_qty * st.session_state.ui_res_hrs_per
         if total_hours > 0:
             new_res = ResourceAllocation(name, total_hours, is_labour=is_lab)
             if st.session_state.is_creating:
@@ -203,8 +231,6 @@ def cb_add_res():
             elif st.session_state.active_act_idx is not None:
                 st.session_state.zones[st.session_state.active_zone_idx].activities[st.session_state.active_act_idx].add_resource(new_res)
             st.session_state.ui_res_hours_overall = 0.0
-            st.session_state.ui_res_qty = 1
-            st.session_state.ui_res_hrs_per = 0.0
 
 def cb_del_qty(el_idx):
     if st.session_state.is_creating: st.session_state.temp_elements.pop(el_idx)
@@ -280,24 +306,34 @@ def cb_delete_zone(z_idx):
     elif st.session_state.active_zone_idx is not None and st.session_state.active_zone_idx > z_idx:
         st.session_state.active_zone_idx -= 1
 
-def generate_export_df():
-    data = []
-    for z in st.session_state.zones:
-        for a in z.activities:
-            for el in a.elements:
-                data.append({"Location": z.name, "Grid": z.grid_reference, "Activity": a.name, "Item Name": el.name, "Type": "Quantity", "Amount": el.quantity, "Unit": el.unit})
-            for res in a.resources:
-                data.append({"Location": z.name, "Grid": z.grid_reference, "Activity": a.name, "Item Name": res.resource_name, "Type": "Resource", "Amount": res.hours, "Unit": "hrs"})
-    return pd.DataFrame(data)
-
 # ==========================================
 # 3. USER INTERFACE (Tabs)
 # ==========================================
-tab1, tab2, tab3, tab4 = st.tabs(["1. Master Rates", "2. Project Scope", "3. Scheduling (WBS)", "4. Reporting & Export"])
+tab1, tab2, tab3, tab4 = st.tabs(["1. Setup & Rates", "2. Project Scope", "3. Scheduling (WBS)", "4. Reporting & Export"])
 
-# --- TAB 1: MASTER RATES ---
+# --- TAB 1: MASTER RATES & SETUP ---
 with tab1:
-    st.subheader("Schedule of Rates")
+    
+    st.subheader("📅 Project Calendar Configuration")
+    st.write("Upload an Excel file containing non-working dates (e.g., Holidays, RDOs) in **Column C**.")
+    
+    uploaded_file = st.file_uploader("Upload Calendar (.xlsx or .xls)", type=['xlsx', 'xls'])
+    if uploaded_file is not None:
+        try:
+            # Read Column C (index 2)
+            df_cal = pd.read_excel(uploaded_file, usecols=[2], header=None)
+            holidays = set()
+            for val in df_cal.iloc[:, 0].dropna():
+                if isinstance(val, (datetime.datetime, pd.Timestamp)):
+                    holidays.add(val.date())
+            st.session_state.calendar.holidays = holidays
+            st.success(f"Successfully loaded {len(holidays)} non-working dates! Sundays are automatically excluded.")
+        except Exception as e:
+            st.error(f"Error reading file. Ensure your dates are in Column C. (Error: {e})")
+    
+    st.divider()
+    
+    st.subheader("💲 Schedule of Rates")
     rt_col1, rt_col2 = st.columns(2)
     
     with rt_col1:
@@ -435,19 +471,12 @@ with tab2:
                 if not st.session_state.resource_rates:
                     st.warning("Go to Tab 1 to add Resource Rates first.")
                 else:
-                    st.radio("Allocation Method", ["Overall Hours", "Resource Multiplier"], horizontal=True, key="ui_alloc_method", label_visibility="collapsed")
-                    r_col1, r_col2 = st.columns([2, 1])
+                    r_col1, r_col2, r_col3, r_col4 = st.columns([2.5, 1.5, 1.5, 2])
                     r_col1.selectbox("Select Resource", list(st.session_state.resource_rates.keys()), key="ui_res_name")
                     r_col2.selectbox("Type", ["Labour", "Plant"], key="ui_res_type")
-                    
-                    rm_col1, rm_col2, rm_col3 = st.columns([3, 3, 2])
-                    if st.session_state.ui_alloc_method == "Overall Hours":
-                        rm_col1.number_input("Total Hours", key="ui_res_hours_overall", min_value=0.0)
-                    else:
-                        rm_col1.number_input("Workers/Plant (Qty)", key="ui_res_qty", min_value=1, step=1)
-                        rm_col2.number_input("Hours per unit", key="ui_res_hrs_per", min_value=0.0)
-                        
-                    st.button("Add Resource", on_click=cb_add_res)
+                    r_col3.number_input("Total Hours", min_value=0.0, key="ui_res_hours_overall")
+                    r_col4.write("")
+                    r_col4.button("Add Resource", on_click=cb_add_res, use_container_width=True)
 
                 if resources_source:
                     for res_i, res in enumerate(resources_source):
@@ -490,8 +519,6 @@ with tab2:
                             e_col1.write(f"&nbsp;&nbsp;**{res_i+1}.** {res.hours:,.2f} hrs of {res.resource_name}")
 
         st.write("")
-        st.button("➕ Add Activity", on_click=cb_new_activity, use_container_width=True)
-        st.divider()
         st.button("✅ Complete Zone", on_click=cb_complete_zone, type="primary", use_container_width=True)
         st.button("🌍 Add Zone", on_click=cb_new_zone, type="secondary", use_container_width=True)
 
@@ -526,7 +553,6 @@ with tab3:
     if not st.session_state.zones:
         st.warning("Please define and save at least one Zone in the 'Project Scope' tab first.")
     else:
-        # 1. Select Zone & ID
         zone_options = {f"{z.name} (Grid: {z.grid_reference})": z for z in st.session_state.zones}
         selected_zone_key = st.selectbox("1. Add Zone to schedule", list(zone_options.keys()))
         selected_zone = zone_options[selected_zone_key]
@@ -536,97 +562,113 @@ with tab3:
         task_id = st.text_input("2. Nominate Parent Task ID", value=suggested_id)
         
         st.divider()
-        st.write("### 3. Assign Durations & Start Dates")
+        st.write("### 3. Assign Durations & Dependencies")
         
         if not selected_zone.activities:
             st.info("There are no activities in this zone yet. Go to Project Scope to add some.")
         else:
             activity_schedules = []
             
-            # Build list of previously scheduled global tasks to allow cross-zone linking
             global_preds = []
             for t in st.session_state.tasks:
                 if not getattr(t, 'is_parent', False):
                     global_preds.append((t.task_id, t.activity.name if t.activity else "Task"))
             
-            h1, h2, h3, h4 = st.columns([3, 1.5, 2, 2])
+            h1, h2, h3, h4, h5 = st.columns([2.5, 1, 2, 2, 1.5])
             h1.markdown("**Activity Name (Auto ID)**")
-            h2.markdown("**Duration (Days)**")
-            h3.markdown("**Start Basis**")
-            h4.markdown("**Date / Lag (Days)**")
+            h2.markdown("**Duration**")
+            h3.markdown("**Link Type**")
+            h4.markdown("**Predecessor / Date**")
+            h5.markdown("**Lag / Overlap**")
             
             current_zone_preds = []
             
             for idx, act in enumerate(selected_zone.activities):
-                c1, c2, c3, c4 = st.columns([3, 1.5, 2, 2])
+                c1, c2, c3, c4, c5 = st.columns([2.5, 1, 2, 2, 1.5])
                 child_id = f"{task_id}.{idx + 1}"
                 
                 c1.markdown(f"**{child_id}** | {act.name}")
                 dur = c2.number_input("Days", min_value=1, value=5, key=f"dur_{selected_zone.name}_{idx}", label_visibility="collapsed")
                 
-                # Default to the immediate predecessor if it's not the first item
-                pred_choices = ["Manual Date"] + [p[0] for p in global_preds] + [p[0] for p in current_zone_preds]
-                default_idx = len(pred_choices) - 1 if idx > 0 else 0
+                # Determine Link options
+                link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
+                default_link = "Finish-to-Start (FS)" if idx > 0 else "Manual Date"
+                link_idx = link_opts.index(default_link)
                 
-                # Format the dropdown so it shows the ID + Name nicely
-                def format_pred(p_id):
-                    if p_id == "Manual Date": return "Manual Date"
-                    name = next((p[1] for p in current_zone_preds if p[0] == p_id), None)
-                    if not name:
-                        name = next((p[1] for p in global_preds if p[0] == p_id), "Task")
-                    short_name = (name[:15] + '..') if len(name) > 15 else name
-                    return f"After {p_id} ({short_name})"
-                
-                basis = c3.selectbox("Start Basis", pred_choices, index=default_idx, format_func=format_pred, key=f"basis_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                link_type = c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{selected_zone.name}_{idx}", label_visibility="collapsed")
                 
                 start_d = None
+                pred_id = None
                 offset = 0
                 
-                if basis == "Manual Date":
+                if link_type == "Manual Date":
                     start_d = c4.date_input("Start Date", datetime.date.today(), key=f"start_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                    c5.write("") # Blank space
                 else:
-                    offset = c4.number_input("Lag (+) / Overlap (-)", value=0, step=1, key=f"offset_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                    c4.caption("*- overlap, + delay*")
+                    pred_choices = [p[0] for p in global_preds] + [p[0] for p in current_zone_preds]
+                    default_pred = current_zone_preds[-1][0] if current_zone_preds else (pred_choices[-1] if pred_choices else None)
+                    
+                    if not pred_choices:
+                        st.error("No previous tasks available to link to! Switch to Manual Date.")
+                    else:
+                        def_pred_idx = pred_choices.index(default_pred) if default_pred in pred_choices else 0
+                        
+                        def format_pred(p_id):
+                            name = next((p[1] for p in current_zone_preds if p[0] == p_id), None)
+                            if not name: name = next((p[1] for p in global_preds if p[0] == p_id), "Task")
+                            short = (name[:15] + '..') if len(name) > 15 else name
+                            return f"{p_id} ({short})"
+                            
+                        pred_id = c4.selectbox("Predecessor", pred_choices, index=def_pred_idx, format_func=format_pred, key=f"pred_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                        offset = c5.number_input("Days (+/-)", value=0, step=1, key=f"off_{selected_zone.name}_{idx}", label_visibility="collapsed")
                 
                 activity_schedules.append({
-                    "id": child_id,
-                    "act": act,
-                    "dur": dur,
-                    "basis": basis,
-                    "start": start_d,
-                    "offset": offset
+                    "id": child_id, "act": act, "dur": dur,
+                    "link_type": link_type, "start": start_d, 
+                    "pred_id": pred_id, "offset": offset
                 })
-                
                 current_zone_preds.append((child_id, act.name))
                 
             st.write("")
             if st.button("💾 Save Zone to Schedule", type="primary"):
                 child_tasks = []
-                
-                # Dictionary to track calculated end dates as we generate the WBS
+                # Dictionaries to track dates for immediate linking
                 end_dates = {t.task_id: t.end_date for t in st.session_state.tasks if not getattr(t, 'is_parent', False)}
+                start_dates = {t.task_id: t.start_date for t in st.session_state.tasks if not getattr(t, 'is_parent', False)}
                 
                 for sched in activity_schedules:
-                    basis = sched["basis"]
+                    dur = sched["dur"]
+                    link = sched["link_type"]
                     
-                    if basis == "Manual Date":
-                        calc_start = sched["start"]
+                    if link == "Manual Date":
+                        calc_start = st.session_state.calendar.add_working_days(sched["start"], 1) # Snap to next working day if weekend
+                        calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
                     else:
-                        pred_end = end_dates.get(basis, datetime.date.today())
+                        p_id = sched["pred_id"]
+                        off = sched["offset"]
                         
-                        # Finish-to-Start default: Task starts 1 working day after predecessor finishes
-                        base_start = st.session_state.calendar.add_working_days(pred_end, 1)
-                        
-                        if sched["offset"] > 0:
-                            calc_start = st.session_state.calendar.add_working_days(base_start, sched["offset"])
-                        elif sched["offset"] < 0:
-                            calc_start = st.session_state.calendar.subtract_working_days(base_start, abs(sched["offset"]))
-                        else:
-                            calc_start = base_start
+                        if link == "Finish-to-Start (FS)":
+                            pred_end = end_dates.get(p_id, datetime.date.today())
+                            base_start = st.session_state.calendar.shift_days(pred_end, 1) # 1 day after finish
+                            calc_start = st.session_state.calendar.shift_days(base_start, off)
+                            calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
                             
-                    ct = ProgrammeTask(sched["id"], selected_zone, sched["act"], sched["dur"], calc_start, st.session_state.calendar, is_parent=False)
+                        elif link == "Start-to-Start (SS)":
+                            pred_start = start_dates.get(p_id, datetime.date.today())
+                            calc_start = st.session_state.calendar.shift_days(pred_start, off)
+                            calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
+                            
+                        elif link == "Finish-to-Finish (FF)":
+                            pred_end = end_dates.get(p_id, datetime.date.today())
+                            calc_end = st.session_state.calendar.shift_days(pred_end, off)
+                            calc_start = st.session_state.calendar.subtract_working_days(calc_end, dur)
+                            
+                    ct = ProgrammeTask(sched["id"], selected_zone, sched["act"], dur, calc_start, st.session_state.calendar, is_parent=False)
+                    ct.end_date = calc_end # Override securely for FF precision
+                    
                     child_tasks.append(ct)
-                    end_dates[ct.task_id] = ct.end_date # Add to dictionary so subsequent tasks can link to it
+                    start_dates[ct.task_id] = ct.start_date
+                    end_dates[ct.task_id] = ct.end_date
                     
                 if child_tasks:
                     parent_start = min(ct.start_date for ct in child_tasks)

@@ -19,7 +19,6 @@ class WorkingDayCalendar:
         return True
 
     def add_working_days(self, start_date, days):
-        """Calculates end date inclusively (e.g., Start Mon + 1 Day = End Mon)"""
         if days <= 0: return start_date
         current_date = start_date
         
@@ -34,7 +33,6 @@ class WorkingDayCalendar:
         return current_date
 
     def subtract_working_days(self, from_date, days):
-        """Calculates start date working backward inclusively"""
         if days <= 0: return from_date
         current_date = from_date
         
@@ -49,7 +47,7 @@ class WorkingDayCalendar:
         return current_date
 
     def shift_days(self, from_date, offset_days):
-        """Shifts a date strictly forward or backward by X working days (for Lag & FS Links)"""
+        """Shifts a date strictly forward or backward by X working days (for Lag/Overlap & FS Links)"""
         if offset_days == 0: return from_date
         current = from_date
         if offset_days > 0:
@@ -349,7 +347,6 @@ def cb_update_schedule():
     for t in st.session_state.tasks:
         if getattr(t, 'is_parent', False): continue
         
-        # Read from dynamic form with getattr safety nets for old cache data
         t.duration_days = st.session_state.get(f"dur_{t.task_id}", getattr(t, 'duration_days', 5))
         t.link_type = st.session_state.get(f"link_{t.task_id}", getattr(t, 'link_type', 'Manual Date'))
         t.pred_id = st.session_state.get(f"pred_{t.task_id}", getattr(t, 'pred_id', None))
@@ -364,20 +361,17 @@ def cb_update_schedule():
         else:
             if t.link_type == "Finish-to-Start (FS)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
-                # FS strictly jumps to the 1st working day AFTER predecessor finishes
                 base_s = cal.shift_days(p_end, 1) 
                 t.start_date = cal.shift_days(base_s, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Start-to-Start (SS)":
                 p_start = start_dates.get(t.pred_id, datetime.date.today())
-                # SS aligns exactly with the predecessor's start day
                 t.start_date = cal.shift_days(p_start, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Finish-to-Finish (FF)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
-                # FF aligns exactly with the predecessor's finish day
                 t.end_date = cal.shift_days(p_end, t.offset)
                 t.start_date = cal.subtract_working_days(t.end_date, t.duration_days)
                 
@@ -512,6 +506,7 @@ with tab2:
                 resources_source = active_act.resources
             
             with st.container(border=True):
+                # ----------------- QUANTITIES -----------------
                 st.write("**Nominate Quantities**")
                 q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns([2.5, 1, 1, 1.5, 2])
                 q_col1.text_input("Work Element", key="ui_elem_name", placeholder="e.g., Formwork", label_visibility="collapsed")
@@ -530,6 +525,8 @@ with tab2:
                         c2.button("🗑️", key=f"del_q_live_{el_i}", on_click=cb_del_qty, args=(el_i,))
 
                 st.divider()
+                
+                # ----------------- RESOURCES -----------------
                 st.write("**Assign Resources**")
                 if not st.session_state.resource_rates:
                     st.warning("Go to Tab 1 to add Resource Rates first.")
@@ -656,7 +653,7 @@ with tab3:
                     
                     c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
                     
-                    # Logic to disable irrelevant inputs
+                    # Greying out logic
                     is_manual = (t_link == "Manual Date")
                     
                     t_pred = getattr(t, 'pred_id', None)
@@ -728,7 +725,6 @@ with tab3:
                     gantt_data.append({
                         "Task": f"{t.task_id} - {t.activity.name}",
                         "Start": t.start_date,
-                        # Add 1 day to finish strictly for the visual chart so 1-day tasks render visibly
                         "Finish": t.end_date + datetime.timedelta(days=1), 
                         "Zone": t.zone.name
                     })
@@ -752,7 +748,8 @@ with tab4:
         st.warning("No data available to report. Please build your scope in Tab 2 first.")
     else:
         boq_data = []
-        res_data = []
+        lab_data = []
+        plant_data = []
         cost_data = []
         grand_total = 0.0
         
@@ -763,7 +760,7 @@ with tab4:
                 act_mat_cost = 0.0
                 act_res_cost = 0.0
                 
-                # 1. BOQ Data
+                # 1. BOQ Data Aggregation
                 for el in a.elements:
                     mat_name = getattr(el, 'material_name', None)
                     mat_rate = sor.get_mat_rate(mat_name) if mat_name and mat_name != "None" else 0.0
@@ -777,18 +774,23 @@ with tab4:
                         "Rate ($)": mat_rate, "Total Cost ($)": cost
                     })
                 
-                # 2. Resource Data
+                # 2. Resource Data Aggregation (Split into Labour & Plant)
                 for res in a.resources:
                     res_rate = getattr(sor, 'get_res_rate', sor.get_rate)(res.resource_name)
                     cost = res.hours * res_rate
                     act_res_cost += cost
                     
-                    res_data.append({
+                    res_row = {
                         "Zone": z.name, "Activity": a.name, "Resource": res.resource_name,
                         "Hours": res.hours, "Rate ($/hr)": res_rate, "Total Cost ($)": cost
-                    })
+                    }
+                    
+                    if getattr(res, 'is_labour', True):
+                        lab_data.append(res_row)
+                    else:
+                        plant_data.append(res_row)
                 
-                # 3. Cost Breakdown Data
+                # 3. Cost Breakdown Aggregation
                 act_total = act_mat_cost + act_res_cost
                 grand_total += act_total
                 cost_data.append({
@@ -796,49 +798,120 @@ with tab4:
                     "Material Cost ($)": act_mat_cost, "Resource Cost ($)": act_res_cost,
                     "Activity Total ($)": act_total
                 })
-        
-        boq_df = pd.DataFrame(boq_data)
-        res_df = pd.DataFrame(res_data)
-        cost_df = pd.DataFrame(cost_data)
-        
+                
+        # Create Core DataFrames
+        df_boq = pd.DataFrame(boq_data)
+        df_lab = pd.DataFrame(lab_data)
+        df_plant = pd.DataFrame(plant_data)
+        df_cost = pd.DataFrame(cost_data)
+
+        # ----------------------------------------------------
+        # NEW: ZONE METRICS & DURATIONS 
+        # ----------------------------------------------------
+        zone_metrics = []
+        cal = st.session_state.calendar
+        for z in st.session_state.zones:
+            z_lab_hrs = sum(res.hours for a in z.activities for res in a.resources if getattr(res, 'is_labour', True))
+            z_plant_hrs = sum(res.hours for a in z.activities for res in a.resources if not getattr(res, 'is_labour', True))
+            
+            # Find the parent task in the schedule to grab dynamic dates
+            z_task = next((t for t in st.session_state.tasks if getattr(t, 'is_parent', False) and t.zone == z), None)
+            
+            dur_days = 0
+            if z_task:
+                # Count actual working days between start and end
+                curr = z_task.start_date
+                while curr <= z_task.end_date:
+                    if cal.is_working_day(curr): dur_days += 1
+                    curr += datetime.timedelta(days=1)
+                    
+            zone_metrics.append({
+                "Zone": z.name,
+                "Total Labour (Hrs)": z_lab_hrs,
+                "Total Plant (Hrs)": z_plant_hrs,
+                "Schedule Duration (Working Days)": dur_days if z_task else "Not Scheduled",
+                "Start Date": z_task.start_date.strftime('%d/%m/%Y') if z_task else "-",
+                "End Date": z_task.end_date.strftime('%d/%m/%Y') if z_task else "-"
+            })
+        df_zone_metrics = pd.DataFrame(zone_metrics)
+
+        # ----------------------------------------------------
+        # NEW: COMBINED TOTALS SUMMARY
+        # ----------------------------------------------------
+        mat_totals = df_boq.groupby(["Element", "Unit"]).agg({"Quantity": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_boq.empty else pd.DataFrame()
+        lab_totals = df_lab.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_lab.empty else pd.DataFrame()
+        plant_totals = df_plant.groupby(["Resource"]).agg({"Hours": "sum", "Total Cost ($)": "sum"}).reset_index() if not df_plant.empty else pd.DataFrame()
+
+        # ----------------------------------------------------
+        # ADD TOTAL ROWS TO CORE SCHEDULES
+        # ----------------------------------------------------
+        if not df_boq.empty:
+            boq_data.append({"Zone": "**TOTAL**", "Activity": "-", "Element": "-", "Quantity": None, "Unit": "-", "Material Link": "-", "Rate ($)": None, "Total Cost ($)": df_boq["Total Cost ($)"].sum()})
+            df_boq = pd.DataFrame(boq_data) # Rebuild to include total row cleanly
+            
+        if not df_lab.empty:
+            lab_data.append({"Zone": "**TOTAL**", "Activity": "-", "Resource": "-", "Hours": df_lab["Hours"].sum(), "Rate ($/hr)": None, "Total Cost ($)": df_lab["Total Cost ($)"].sum()})
+            df_lab = pd.DataFrame(lab_data)
+            
+        if not df_plant.empty:
+            plant_data.append({"Zone": "**TOTAL**", "Activity": "-", "Resource": "-", "Hours": df_plant["Hours"].sum(), "Rate ($/hr)": None, "Total Cost ($)": df_plant["Total Cost ($)"].sum()})
+            df_plant = pd.DataFrame(plant_data)
+
+        # ----------------------------------------------------
+        # UI RENDER (Expanders)
+        # ----------------------------------------------------
         with st.expander("1. Detailed Bill of Quantities", expanded=True):
-            st.dataframe(boq_df, use_container_width=True, hide_index=True)
+            st.dataframe(df_boq, use_container_width=True, hide_index=True)
             
-        with st.expander("2. Detailed Resource Schedule"):
-            st.dataframe(res_df, use_container_width=True, hide_index=True)
+        with st.expander("2. Detailed Labour Schedule"):
+            if not df_lab.empty: st.dataframe(df_lab, use_container_width=True, hide_index=True)
+            else: st.info("No labour resources added.")
             
-        with st.expander("3. Cost Breakdown (Activity / Zone)"):
-            st.dataframe(cost_df, use_container_width=True, hide_index=True)
+        with st.expander("3. Detailed Plant Schedule"):
+            if not df_plant.empty: st.dataframe(df_plant, use_container_width=True, hide_index=True)
+            else: st.info("No plant resources added.")
+            
+        with st.expander("4. Zone Summary (Hours & Duration)"):
+            st.dataframe(df_zone_metrics, use_container_width=True, hide_index=True)
+            
+        with st.expander("5. Combined Totals (Materials, Labour, Plant)"):
+            c1, c2, c3 = st.columns(3)
+            c1.write("**Total Materials**")
+            if not mat_totals.empty: c1.dataframe(mat_totals, use_container_width=True, hide_index=True)
+            else: c1.caption("No materials")
+            
+            c2.write("**Total Labour**")
+            if not lab_totals.empty: c2.dataframe(lab_totals, use_container_width=True, hide_index=True)
+            else: c2.caption("No labour")
+            
+            c3.write("**Total Plant**")
+            if not plant_totals.empty: c3.dataframe(plant_totals, use_container_width=True, hide_index=True)
+            else: c3.caption("No plant")
+            
+        with st.expander("6. Cost Breakdown (Activity / Zone)"):
+            st.dataframe(df_cost, use_container_width=True, hide_index=True)
             st.metric("Total Project Cost", f"${grand_total:,.2f}")
         
         st.divider()
-        st.write("### 📥 Download Reports")
         
+        # ----------------------------------------------------
+        # CSV DOWNLOAD EXPORTS
+        # ----------------------------------------------------
+        st.write("### 📥 Download Reports (CSV)")
         d_col1, d_col2, d_col3 = st.columns(3)
+        d_col4, d_col5, d_col6 = st.columns(3)
         
-        if not boq_df.empty:
-            d_col1.download_button(
-                label="Download BOQ (CSV)",
-                data=boq_df.to_csv(index=False).encode('utf-8'),
-                file_name="Bill_of_Quantities.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        if not df_boq.empty:
+            d_col1.download_button(label="Download BOQ", data=df_boq.to_csv(index=False).encode('utf-8'), file_name="BOQ.csv", mime="text/csv", use_container_width=True)
+            if not mat_totals.empty:
+                d_col4.download_button(label="Download Combined Materials", data=mat_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Materials.csv", mime="text/csv", use_container_width=True)
             
-        if not res_df.empty:
-            d_col2.download_button(
-                label="Download Resources (CSV)",
-                data=res_df.to_csv(index=False).encode('utf-8'),
-                file_name="Resource_Schedule.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        if not df_lab.empty:
+            d_col2.download_button(label="Download Labour Schedule", data=df_lab.to_csv(index=False).encode('utf-8'), file_name="Labour_Schedule.csv", mime="text/csv", use_container_width=True)
+            if not lab_totals.empty:
+                d_col5.download_button(label="Download Combined Labour", data=lab_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Labour.csv", mime="text/csv", use_container_width=True)
             
-        if not cost_df.empty:
-            d_col3.download_button(
-                label="Download Costs (CSV)",
-                data=cost_df.to_csv(index=False).encode('utf-8'),
-                file_name="Cost_Breakdown.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        if not df_plant.empty:
+            d_col3.download_button(label="Download Plant Schedule", data=df_plant.to_csv(index=False).encode('utf-8'), file_name="Plant_Schedule.csv", mime="text/csv", use_container_width=True)
+            if not plant_totals.empty:
+                d_col6.download_button(label="Download Combined Plant", data=plant_totals.to_csv(index=False).encode('utf-8'), file_name="Combined_Plant.csv", mime="text/csv", use_container_width=True)

@@ -19,11 +19,9 @@ class WorkingDayCalendar:
         return True
 
     def add_working_days(self, start_date, days):
-        """Adds duration days inclusive of the start date."""
         if days <= 0: return start_date
         current_date = start_date
         
-        # Snap to the next valid working day if starting on a weekend/holiday
         while not self.is_working_day(current_date):
             current_date += datetime.timedelta(days=1)
             
@@ -35,7 +33,6 @@ class WorkingDayCalendar:
         return current_date
 
     def subtract_working_days(self, from_date, days):
-        """Subtracts duration days inclusive of the end date (useful for FF links)."""
         if days <= 0: return from_date
         current_date = from_date
         
@@ -50,7 +47,6 @@ class WorkingDayCalendar:
         return current_date
 
     def shift_days(self, from_date, offset_days):
-        """Shifts a date forward or backward by X working days strictly (for Lag/Overlap)."""
         if offset_days == 0: return from_date
         current = from_date
         if offset_days > 0:
@@ -75,8 +71,7 @@ class ScheduleOfRates:
         
     def get_mat_rate(self, name): 
         mat_data = self.mat_rates.get(name, {})
-        if isinstance(mat_data, dict):
-            return mat_data.get('rate', 0.0)
+        if isinstance(mat_data, dict): return mat_data.get('rate', 0.0)
         return float(mat_data)
         
     def get_rate(self, name):
@@ -92,8 +87,7 @@ class WorkElement:
         
     def get_cost(self, sor): 
         mat_name = getattr(self, 'material_name', None)
-        if mat_name and mat_name != "None": 
-            return self.quantity * sor.get_mat_rate(mat_name)
+        if mat_name and mat_name != "None": return self.quantity * sor.get_mat_rate(mat_name)
         return 0.0
 
 class ResourceAllocation:
@@ -126,7 +120,12 @@ class ProgrammeTask:
         self.start_date = start_date
         self.is_parent = is_parent
         
-        # Calculate standard end date (can be manually overwritten later for FF links)
+        # Scheduling Meta-Data (Populated by the UI)
+        self.link_type = "Manual Date"
+        self.pred_id = None
+        self.offset = 0
+        self.manual_start = start_date
+        
         if duration_days > 0:
             self.end_date = calendar.add_working_days(self.start_date, self.duration_days)
         else:
@@ -159,16 +158,17 @@ if 'calendar' not in st.session_state: st.session_state.calendar = WorkingDayCal
 
 if 'active_zone_idx' not in st.session_state: st.session_state.active_zone_idx = None
 if 'active_act_idx' not in st.session_state: st.session_state.active_act_idx = None
-
 if 'is_creating' not in st.session_state: st.session_state.is_creating = False
-if 'temp_act_name' not in st.session_state: st.session_state.temp_act_name = ""
-if 'temp_elements' not in st.session_state: st.session_state.temp_elements = []
-if 'temp_resources' not in st.session_state: st.session_state.temp_resources = []
 
-for key in ['ui_zone_name', 'ui_grid_ref', 'ui_act_name', 'ui_elem_name']:
+for key in ['temp_act_name', 'ui_zone_name', 'ui_grid_ref', 'ui_act_name', 'ui_elem_name']:
     if key not in st.session_state: st.session_state[key] = ""
 for key in ['ui_elem_qty', 'ui_res_hours_overall']:
     if key not in st.session_state: st.session_state[key] = 0.0
+    
+if 'temp_elements' not in st.session_state: st.session_state.temp_elements = []
+if 'temp_resources' not in st.session_state: st.session_state.temp_resources = []
+if 'ui_res_qty' not in st.session_state: st.session_state.ui_res_qty = 1
+if 'ui_alloc_method' not in st.session_state: st.session_state.ui_alloc_method = "Overall Hours"
 if 'ui_res_type' not in st.session_state: st.session_state.ui_res_type = "Labour"
 
 # ==========================================
@@ -179,8 +179,7 @@ def cb_set_zone():
     z_grid = st.session_state.ui_grid_ref.strip()
     if z_name:
         existing_idx = next((i for i, z in enumerate(st.session_state.zones) if z.name == z_name and z.grid_reference == z_grid), None)
-        if existing_idx is not None:
-            st.session_state.active_zone_idx = existing_idx
+        if existing_idx is not None: st.session_state.active_zone_idx = existing_idx
         else:
             st.session_state.zones.append(Zone(z_name, z_grid))
             st.session_state.active_zone_idx = len(st.session_state.zones) - 1
@@ -208,11 +207,9 @@ def cb_add_qty():
     qty = st.session_state.ui_elem_qty
     unit = st.session_state.ui_elem_unit
     mat_name = st.session_state.ui_elem_mat if st.session_state.ui_elem_mat != "None" else None
-    
     if name and qty > 0:
         new_el = WorkElement(name, qty, unit, mat_name)
-        if st.session_state.is_creating:
-            st.session_state.temp_elements.append(new_el)
+        if st.session_state.is_creating: st.session_state.temp_elements.append(new_el)
         elif st.session_state.active_act_idx is not None:
             st.session_state.zones[st.session_state.active_zone_idx].activities[st.session_state.active_act_idx].add_element(new_el)
         st.session_state.ui_elem_name = ""
@@ -223,11 +220,9 @@ def cb_add_res():
         name = st.session_state.ui_res_name
         is_lab = (st.session_state.ui_res_type == "Labour")
         total_hours = st.session_state.ui_res_hours_overall
-        
         if total_hours > 0:
             new_res = ResourceAllocation(name, total_hours, is_labour=is_lab)
-            if st.session_state.is_creating:
-                st.session_state.temp_resources.append(new_res)
+            if st.session_state.is_creating: st.session_state.temp_resources.append(new_res)
             elif st.session_state.active_act_idx is not None:
                 st.session_state.zones[st.session_state.active_zone_idx].activities[st.session_state.active_act_idx].add_resource(new_res)
             st.session_state.ui_res_hours_overall = 0.0
@@ -252,8 +247,7 @@ def cb_edit_activity(a_idx):
 def cb_delete_activity(a_idx):
     z_idx = st.session_state.active_zone_idx
     st.session_state.zones[z_idx].activities.pop(a_idx)
-    if st.session_state.active_act_idx == a_idx:
-        st.session_state.active_act_idx = None
+    if st.session_state.active_act_idx == a_idx: st.session_state.active_act_idx = None
     elif st.session_state.active_act_idx is not None and st.session_state.active_act_idx > a_idx:
         st.session_state.active_act_idx -= 1
 
@@ -306,6 +300,95 @@ def cb_delete_zone(z_idx):
     elif st.session_state.active_zone_idx is not None and st.session_state.active_zone_idx > z_idx:
         st.session_state.active_zone_idx -= 1
 
+# --- WBS SCHEDULING ENGINE ---
+def cb_add_zone_to_wbs():
+    zone_key = st.session_state.ui_schedule_zone
+    task_id = st.session_state.ui_schedule_id
+    zone = next((z for z in st.session_state.zones if f"{z.name} (Grid: {z.grid_reference})" == zone_key), None)
+    if not zone: return
+    
+    current_start = datetime.date.today()
+    child_tasks = []
+    
+    # Find the very last child task in the schedule to automatically link to
+    last_task_id = None
+    for t in reversed(st.session_state.tasks):
+        if not t.is_parent:
+            last_task_id = t.task_id
+            break
+            
+    for idx, act in enumerate(zone.activities):
+        child_id = f"{task_id}.{idx + 1}"
+        ct = ProgrammeTask(child_id, zone, act, 5, current_start, st.session_state.calendar, is_parent=False)
+        
+        # Smart Default Links
+        if idx == 0:
+            if last_task_id:
+                ct.link_type = "Finish-to-Start (FS)"
+                ct.pred_id = last_task_id
+            else:
+                ct.link_type = "Manual Date"
+                ct.pred_id = None
+        else:
+            ct.link_type = "Finish-to-Start (FS)"
+            ct.pred_id = f"{task_id}.{idx}"
+            
+        child_tasks.append(ct)
+        
+    pt = ProgrammeTask(task_id, zone, None, 0, current_start, st.session_state.calendar, is_parent=True)
+    st.session_state.tasks.append(pt)
+    st.session_state.tasks.extend(child_tasks)
+    cb_update_schedule() # Automatically run math so defaults lock in
+
+def cb_update_schedule():
+    end_dates = {}
+    start_dates = {}
+    cal = st.session_state.calendar
+    
+    for t in st.session_state.tasks:
+        if t.is_parent: continue
+        
+        # Read from dynamic form memory
+        t.duration_days = st.session_state.get(f"dur_{t.task_id}", t.duration_days)
+        t.link_type = st.session_state.get(f"link_{t.task_id}", t.link_type)
+        t.pred_id = st.session_state.get(f"pred_{t.task_id}", t.pred_id)
+        t.offset = st.session_state.get(f"off_{t.task_id}", t.offset)
+        t.manual_start = st.session_state.get(f"start_{t.task_id}", t.manual_start)
+        
+        if t.link_type == "Manual Date":
+            # Snap to a working day
+            base = t.manual_start
+            while not cal.is_working_day(base): base += datetime.timedelta(days=1)
+            t.start_date = base
+            t.end_date = cal.add_working_days(t.start_date, t.duration_days)
+        else:
+            if t.link_type == "Finish-to-Start (FS)":
+                p_end = end_dates.get(t.pred_id, datetime.date.today())
+                base_s = cal.shift_days(p_end, 1) # Start 1 day after pred finishes
+                t.start_date = cal.shift_days(base_s, t.offset)
+                t.end_date = cal.add_working_days(t.start_date, t.duration_days)
+                
+            elif t.link_type == "Start-to-Start (SS)":
+                p_start = start_dates.get(t.pred_id, datetime.date.today())
+                t.start_date = cal.shift_days(p_start, t.offset)
+                t.end_date = cal.add_working_days(t.start_date, t.duration_days)
+                
+            elif t.link_type == "Finish-to-Finish (FF)":
+                p_end = end_dates.get(t.pred_id, datetime.date.today())
+                t.end_date = cal.shift_days(p_end, t.offset)
+                t.start_date = cal.subtract_working_days(t.end_date, t.duration_days)
+                
+        start_dates[t.task_id] = t.start_date
+        end_dates[t.task_id] = t.end_date
+        
+    # Update Parent Summaries
+    for t in st.session_state.tasks:
+        if t.is_parent:
+            children = [ct for ct in st.session_state.tasks if not ct.is_parent and ct.task_id.startswith(f"{t.task_id}.")]
+            if children:
+                t.start_date = min(c.start_date for c in children)
+                t.end_date = max(c.end_date for c in children)
+
 # ==========================================
 # 3. USER INTERFACE (Tabs)
 # ==========================================
@@ -313,26 +396,22 @@ tab1, tab2, tab3, tab4 = st.tabs(["1. Setup & Rates", "2. Project Scope", "3. Sc
 
 # --- TAB 1: MASTER RATES & SETUP ---
 with tab1:
-    
     st.subheader("📅 Project Calendar Configuration")
     st.write("Upload an Excel file containing non-working dates (e.g., Holidays, RDOs) in **Column C**.")
     
     uploaded_file = st.file_uploader("Upload Calendar (.xlsx or .xls)", type=['xlsx', 'xls'])
     if uploaded_file is not None:
         try:
-            # Read Column C (index 2)
             df_cal = pd.read_excel(uploaded_file, usecols=[2], header=None)
             holidays = set()
             for val in df_cal.iloc[:, 0].dropna():
-                if isinstance(val, (datetime.datetime, pd.Timestamp)):
-                    holidays.add(val.date())
+                if isinstance(val, (datetime.datetime, pd.Timestamp)): holidays.add(val.date())
             st.session_state.calendar.holidays = holidays
             st.success(f"Successfully loaded {len(holidays)} non-working dates! Sundays are automatically excluded.")
         except Exception as e:
             st.error(f"Error reading file. Ensure your dates are in Column C. (Error: {e})")
     
     st.divider()
-    
     st.subheader("💲 Schedule of Rates")
     rt_col1, rt_col2 = st.columns(2)
     
@@ -370,30 +449,17 @@ with tab1:
         st.info("💡 **Tip:** Click directly on any cell in the table below to **edit the rate**, or select a row and press `Delete` to remove it.")
         mat_list = []
         for k, v in st.session_state.material_rates.items():
-            if isinstance(v, dict):
-                mat_list.append({"Material Name": k, "Unit Rate ($)": v.get('rate', 0.0), "Unit": v.get('unit', 'ea')})
-            else:
-                mat_list.append({"Material Name": k, "Unit Rate ($)": float(v), "Unit": "ea"}) 
+            if isinstance(v, dict): mat_list.append({"Material Name": k, "Unit Rate ($)": v.get('rate', 0.0), "Unit": v.get('unit', 'ea')})
+            else: mat_list.append({"Material Name": k, "Unit Rate ($)": float(v), "Unit": "ea"}) 
         
         mat_df = pd.DataFrame(mat_list)
-        edited_mat = st.data_editor(
-            mat_df, 
-            num_rows="dynamic", 
-            use_container_width=True, 
-            key="mat_edit",
-            column_config={
-                "Unit": st.column_config.SelectboxColumn("Unit", options=["m2", "m3", "tonnes", "lm", "ea"])
-            }
-        )
+        edited_mat = st.data_editor(mat_df, num_rows="dynamic", use_container_width=True, key="mat_edit", column_config={"Unit": st.column_config.SelectboxColumn("Unit", options=["m2", "m3", "tonnes", "lm", "ea"])})
         
         updated_mat = {}
         for _, row in edited_mat.iterrows():
             name = str(row["Material Name"]).strip()
             if name and name != "nan" and name != "None":
-                updated_mat[name] = {
-                    'rate': float(row["Unit Rate ($)"]) if pd.notna(row["Unit Rate ($)"]) else 0.0,
-                    'unit': str(row["Unit"]) if pd.notna(row["Unit"]) else 'ea'
-                }
+                updated_mat[name] = {'rate': float(row["Unit Rate ($)"]) if pd.notna(row["Unit Rate ($)"]) else 0.0, 'unit': str(row["Unit"]) if pd.notna(row["Unit"]) else 'ea'}
         st.session_state.material_rates = updated_mat
 
 # --- TAB 2: PROJECT SCOPE ---
@@ -450,10 +516,8 @@ with tab2:
                 q_col1.text_input("Work Element", key="ui_elem_name", placeholder="e.g., Formwork", label_visibility="collapsed")
                 q_col2.number_input("Quantity", key="ui_elem_qty", min_value=0.0, label_visibility="collapsed")
                 q_col3.selectbox("Unit", ["m2", "m3", "tonnes", "lm", "ea"], key="ui_elem_unit", label_visibility="collapsed")
-                
                 mat_options = ["None"] + list(st.session_state.material_rates.keys())
                 q_col4.selectbox("Link Material Rate", mat_options, key="ui_elem_mat", label_visibility="collapsed")
-                
                 q_col5.button("Add Quantity", on_click=cb_add_qty, use_container_width=True)
 
                 if elements_source:
@@ -499,11 +563,8 @@ with tab2:
                 with st.expander(f"{'🔵 ' if i == a_idx else ''}{act.name}", expanded=True):
                     e_col1, e_col2, e_col3 = st.columns([7, 1.5, 1.5])
                     
-                    if i != a_idx:
-                        e_col2.button("✏️ Edit", key=f"edit_act_{i}", on_click=cb_edit_activity, args=(i,), use_container_width=True)
-                    else:
-                        e_col2.info("Editing")
-                        
+                    if i != a_idx: e_col2.button("✏️ Edit", key=f"edit_act_{i}", on_click=cb_edit_activity, args=(i,), use_container_width=True)
+                    else: e_col2.info("Editing")
                     e_col3.button("🗑️ Delete", key=f"del_act_{i}", on_click=cb_delete_activity, args=(i,), type="secondary", use_container_width=True)
 
                     if act.elements:
@@ -519,6 +580,8 @@ with tab2:
                             e_col1.write(f"&nbsp;&nbsp;**{res_i+1}.** {res.hours:,.2f} hrs of {res.resource_name}")
 
         st.write("")
+        st.button("➕ Add Activity", on_click=cb_new_activity, use_container_width=True)
+        st.divider()
         st.button("✅ Complete Zone", on_click=cb_complete_zone, type="primary", use_container_width=True)
         st.button("🌍 Add Zone", on_click=cb_new_zone, type="secondary", use_container_width=True)
 
@@ -535,159 +598,78 @@ with tab2:
             with st.expander(f"{'📍 ' if z_i == z_idx else ''}{z.name} | Grid: {z.grid_reference}"):
                 zc1, zc2, zc3 = st.columns([7, 1.5, 1.5])
                 
-                if z_i != z_idx:
-                    zc2.button("✏️ Edit Zone", key=f"edit_z_{z_i}", on_click=cb_edit_zone, args=(z_i,), use_container_width=True)
-                else:
-                    zc2.info("Active")
+                if z_i != z_idx: zc2.button("✏️ Edit Zone", key=f"edit_z_{z_i}", on_click=cb_edit_zone, args=(z_i,), use_container_width=True)
+                else: zc2.info("Active")
                     
                 zc3.button("🗑️ Delete Zone", key=f"del_z_{z_i}", on_click=cb_delete_zone, args=(z_i,), type="secondary", use_container_width=True)
-
                 zc1.write(f"**Total Activities:** {len(z.activities)}")
                 if z.activities:
-                    for a in z.activities:
-                        zc1.write(f"- {a.name}")
+                    for a in z.activities: zc1.write(f"- {a.name}")
 
 # --- TAB 3: SCHEDULING (WBS) ---
 with tab3:
-    st.subheader("Work Breakdown Structure (WBS)")
+    st.subheader("1. Work Breakdown Structure")
+    
     if not st.session_state.zones:
         st.warning("Please define and save at least one Zone in the 'Project Scope' tab first.")
     else:
         zone_options = {f"{z.name} (Grid: {z.grid_reference})": z for z in st.session_state.zones}
-        selected_zone_key = st.selectbox("1. Add Zone to schedule", list(zone_options.keys()))
-        selected_zone = zone_options[selected_zone_key]
+        
+        l_col1, l_col2, l_col3 = st.columns([3, 1, 1])
+        l_col1.selectbox("Select Zone", list(zone_options.keys()), key="ui_schedule_zone")
         
         parent_count = sum(1 for t in st.session_state.tasks if getattr(t, 'is_parent', False))
         suggested_id = f"T{parent_count + 1:02d}"
-        task_id = st.text_input("2. Nominate Parent Task ID", value=suggested_id)
+        l_col2.text_input("Parent Task ID", value=suggested_id, key="ui_schedule_id")
+        
+        l_col3.write("")
+        l_col3.button("Add Zone to WBS", on_click=cb_add_zone_to_wbs, type="primary", use_container_width=True)
         
         st.divider()
-        st.write("### 3. Assign Durations & Dependencies")
+        st.subheader("2. Assign Dependencies")
+        st.write("Edit durations, link types, and offset dates for all scheduled activities. Click **Update Schedule** to apply changes.")
         
-        if not selected_zone.activities:
-            st.info("There are no activities in this zone yet. Go to Project Scope to add some.")
+        if not st.session_state.tasks:
+            st.info("Add a Zone to the WBS above to begin scheduling.")
         else:
-            activity_schedules = []
-            
-            global_preds = []
-            for t in st.session_state.tasks:
-                if not getattr(t, 'is_parent', False):
-                    global_preds.append((t.task_id, t.activity.name if t.activity else "Task"))
-            
-            h1, h2, h3, h4, h5 = st.columns([2.5, 1, 2, 2, 1.5])
-            h1.markdown("**Activity Name (Auto ID)**")
-            h2.markdown("**Duration**")
-            h3.markdown("**Link Type**")
-            h4.markdown("**Predecessor / Date**")
-            h5.markdown("**Lag / Overlap**")
-            
-            current_zone_preds = []
-            
-            for idx, act in enumerate(selected_zone.activities):
-                c1, c2, c3, c4, c5 = st.columns([2.5, 1, 2, 2, 1.5])
-                child_id = f"{task_id}.{idx + 1}"
+            with st.form("dependencies_form"):
                 
-                c1.markdown(f"**{child_id}** | {act.name}")
-                dur = c2.number_input("Days", min_value=1, value=5, key=f"dur_{selected_zone.name}_{idx}", label_visibility="collapsed")
+                # Build Predecessor Options (All non-parent tasks)
+                pred_opts = [t.task_id for t in st.session_state.tasks if not t.is_parent]
                 
-                # Determine Link options
-                link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
-                default_link = "Finish-to-Start (FS)" if idx > 0 else "Manual Date"
-                link_idx = link_opts.index(default_link)
+                # Header Row
+                h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
+                h1.markdown("**Activity (ID)**")
+                h2.markdown("**Duration**")
+                h3.markdown("**Link Type**")
+                h4.markdown("**Predecessor**")
+                h5.markdown("**Lag / Overlap**")
+                h6.markdown("**Manual Date**")
                 
-                link_type = c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                
-                start_d = None
-                pred_id = None
-                offset = 0
-                
-                if link_type == "Manual Date":
-                    start_d = c4.date_input("Start Date", datetime.date.today(), key=f"start_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                    c5.write("") # Blank space
-                else:
-                    pred_choices = [p[0] for p in global_preds] + [p[0] for p in current_zone_preds]
-                    default_pred = current_zone_preds[-1][0] if current_zone_preds else (pred_choices[-1] if pred_choices else None)
-                    
-                    if not pred_choices:
-                        st.error("No previous tasks available to link to! Switch to Manual Date.")
+                for t in st.session_state.tasks:
+                    if t.is_parent:
+                        st.markdown(f"#### 📍 {t.task_id} | {t.zone.name}")
                     else:
-                        def_pred_idx = pred_choices.index(default_pred) if default_pred in pred_choices else 0
+                        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1.5, 1.5, 1, 1.2])
+                        c1.write(f"└ **{t.task_id}** {t.activity.name}")
                         
-                        def format_pred(p_id):
-                            name = next((p[1] for p in current_zone_preds if p[0] == p_id), None)
-                            if not name: name = next((p[1] for p in global_preds if p[0] == p_id), "Task")
-                            short = (name[:15] + '..') if len(name) > 15 else name
-                            return f"{p_id} ({short})"
-                            
-                        pred_id = c4.selectbox("Predecessor", pred_choices, index=def_pred_idx, format_func=format_pred, key=f"pred_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                        offset = c5.number_input("Days (+/-)", value=0, step=1, key=f"off_{selected_zone.name}_{idx}", label_visibility="collapsed")
-                
-                activity_schedules.append({
-                    "id": child_id, "act": act, "dur": dur,
-                    "link_type": link_type, "start": start_d, 
-                    "pred_id": pred_id, "offset": offset
-                })
-                current_zone_preds.append((child_id, act.name))
-                
-            st.write("")
-            if st.button("💾 Save Zone to Schedule", type="primary"):
-                child_tasks = []
-                # Dictionaries to track dates for immediate linking
-                end_dates = {t.task_id: t.end_date for t in st.session_state.tasks if not getattr(t, 'is_parent', False)}
-                start_dates = {t.task_id: t.start_date for t in st.session_state.tasks if not getattr(t, 'is_parent', False)}
-                
-                for sched in activity_schedules:
-                    dur = sched["dur"]
-                    link = sched["link_type"]
-                    
-                    if link == "Manual Date":
-                        calc_start = st.session_state.calendar.add_working_days(sched["start"], 1) # Snap to next working day if weekend
-                        calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
-                    else:
-                        p_id = sched["pred_id"]
-                        off = sched["offset"]
+                        c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
                         
-                        if link == "Finish-to-Start (FS)":
-                            pred_end = end_dates.get(p_id, datetime.date.today())
-                            base_start = st.session_state.calendar.shift_days(pred_end, 1) # 1 day after finish
-                            calc_start = st.session_state.calendar.shift_days(base_start, off)
-                            calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
-                            
-                        elif link == "Start-to-Start (SS)":
-                            pred_start = start_dates.get(p_id, datetime.date.today())
-                            calc_start = st.session_state.calendar.shift_days(pred_start, off)
-                            calc_end = st.session_state.calendar.add_working_days(calc_start, dur)
-                            
-                        elif link == "Finish-to-Finish (FF)":
-                            pred_end = end_dates.get(p_id, datetime.date.today())
-                            calc_end = st.session_state.calendar.shift_days(pred_end, off)
-                            calc_start = st.session_state.calendar.subtract_working_days(calc_end, dur)
-                            
-                    ct = ProgrammeTask(sched["id"], selected_zone, sched["act"], dur, calc_start, st.session_state.calendar, is_parent=False)
-                    ct.end_date = calc_end # Override securely for FF precision
-                    
-                    child_tasks.append(ct)
-                    start_dates[ct.task_id] = ct.start_date
-                    end_dates[ct.task_id] = ct.end_date
-                    
-                if child_tasks:
-                    parent_start = min(ct.start_date for ct in child_tasks)
-                    parent_end = max(ct.end_date for ct in child_tasks)
-                else:
-                    parent_start = datetime.date.today()
-                    parent_end = datetime.date.today()
-                    
-                parent_task = ProgrammeTask(task_id, selected_zone, None, 0, parent_start, st.session_state.calendar, is_parent=True)
-                parent_task.start_date = parent_start
-                parent_task.end_date = parent_end
-                
-                st.session_state.tasks.append(parent_task)
-                st.session_state.tasks.extend(child_tasks)
-                st.success(f"Scheduled Zone '{selected_zone.name}' with {len(child_tasks)} activities.")
-                st.rerun()
+                        link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
+                        link_idx = link_opts.index(t.link_type) if t.link_type in link_opts else 0
+                        c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
+                        
+                        def_pred_idx = pred_opts.index(t.pred_id) if t.pred_id in pred_opts else 0
+                        c4.selectbox("Predecessor", pred_opts, index=def_pred_idx, key=f"pred_{t.task_id}", label_visibility="collapsed")
+                        
+                        c5.number_input("Lag", value=t.offset, step=1, key=f"off_{t.task_id}", label_visibility="collapsed")
+                        c6.date_input("Start", t.manual_start, key=f"start_{t.task_id}", label_visibility="collapsed")
+                        
+                st.write("")
+                st.form_submit_button("✅ Update Schedule", on_click=cb_update_schedule, type="primary", use_container_width=True)
 
         st.divider()
-        st.write("### Current Schedule")
+        st.write("### 3. Current Schedule")
         
         if st.session_state.tasks:
             # -----------------------------------------

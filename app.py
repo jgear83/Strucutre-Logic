@@ -19,6 +19,7 @@ class WorkingDayCalendar:
         return True
 
     def add_working_days(self, start_date, days):
+        """Calculates end date inclusively (e.g., Start Mon + 1 Day = End Mon)"""
         if days <= 0: return start_date
         current_date = start_date
         
@@ -33,6 +34,7 @@ class WorkingDayCalendar:
         return current_date
 
     def subtract_working_days(self, from_date, days):
+        """Calculates start date working backward inclusively"""
         if days <= 0: return from_date
         current_date = from_date
         
@@ -47,7 +49,7 @@ class WorkingDayCalendar:
         return current_date
 
     def shift_days(self, from_date, offset_days):
-        """Shifts a date strictly forward or backward by X working days (for Lag/Overlap & FS Links)"""
+        """Shifts a date strictly forward or backward by X working days (for Lag & FS Links)"""
         if offset_days == 0: return from_date
         current = from_date
         if offset_days > 0:
@@ -321,7 +323,6 @@ def cb_add_zone_to_wbs():
         child_id = f"{task_id}.{idx + 1}"
         ct = ProgrammeTask(child_id, zone, act, 5, current_start, st.session_state.calendar, is_parent=False)
         
-        # Smart Default Links
         if idx == 0:
             if last_task_id:
                 ct.link_type = "Finish-to-Start (FS)"
@@ -349,7 +350,7 @@ def cb_update_schedule():
         if getattr(t, 'is_parent', False): continue
         
         # Read from dynamic form with getattr safety nets for old cache data
-        t.duration_days = st.session_state.get(f"dur_{t.task_id}", t.duration_days)
+        t.duration_days = st.session_state.get(f"dur_{t.task_id}", getattr(t, 'duration_days', 5))
         t.link_type = st.session_state.get(f"link_{t.task_id}", getattr(t, 'link_type', 'Manual Date'))
         t.pred_id = st.session_state.get(f"pred_{t.task_id}", getattr(t, 'pred_id', None))
         t.offset = st.session_state.get(f"off_{t.task_id}", getattr(t, 'offset', 0))
@@ -363,20 +364,20 @@ def cb_update_schedule():
         else:
             if t.link_type == "Finish-to-Start (FS)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
-                # FS Starts 1 working day strictly AFTER predecessor finishes
+                # FS strictly jumps to the 1st working day AFTER predecessor finishes
                 base_s = cal.shift_days(p_end, 1) 
                 t.start_date = cal.shift_days(base_s, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Start-to-Start (SS)":
                 p_start = start_dates.get(t.pred_id, datetime.date.today())
-                # SS Starts on EXACT same working day as predecessor starts
+                # SS aligns exactly with the predecessor's start day
                 t.start_date = cal.shift_days(p_start, t.offset)
                 t.end_date = cal.add_working_days(t.start_date, t.duration_days)
                 
             elif t.link_type == "Finish-to-Finish (FF)":
                 p_end = end_dates.get(t.pred_id, datetime.date.today())
-                # FF Finishes on EXACT same working day as predecessor finishes
+                # FF aligns exactly with the predecessor's finish day
                 t.end_date = cal.shift_days(p_end, t.offset)
                 t.start_date = cal.subtract_working_days(t.end_date, t.duration_days)
                 
@@ -511,7 +512,6 @@ with tab2:
                 resources_source = active_act.resources
             
             with st.container(border=True):
-                # ----------------- QUANTITIES -----------------
                 st.write("**Nominate Quantities**")
                 q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns([2.5, 1, 1, 1.5, 2])
                 q_col1.text_input("Work Element", key="ui_elem_name", placeholder="e.g., Formwork", label_visibility="collapsed")
@@ -530,8 +530,6 @@ with tab2:
                         c2.button("🗑️", key=f"del_q_live_{el_i}", on_click=cb_del_qty, args=(el_i,))
 
                 st.divider()
-                
-                # ----------------- RESOURCES -----------------
                 st.write("**Assign Resources**")
                 if not st.session_state.resource_rates:
                     st.warning("Go to Tab 1 to add Resource Rates first.")
@@ -653,15 +651,12 @@ with tab3:
                     c2.number_input("Duration", min_value=1, value=t.duration_days, key=f"dur_{t.task_id}", label_visibility="collapsed")
                     
                     link_opts = ["Manual Date", "Finish-to-Start (FS)", "Start-to-Start (SS)", "Finish-to-Finish (FF)"]
-                    
-                    # Fetch link type from memory, default to safe fallback for old tasks
                     t_link = st.session_state.get(f"link_{t.task_id}", getattr(t, 'link_type', 'Manual Date'))
                     link_idx = link_opts.index(t_link) if t_link in link_opts else 0
                     
-                    # The selectbox will instantly update session_state and rerun the app when changed
                     c3.selectbox("Link Type", link_opts, index=link_idx, key=f"link_{t.task_id}", label_visibility="collapsed")
                     
-                    # Greying out logic
+                    # Logic to disable irrelevant inputs
                     is_manual = (t_link == "Manual Date")
                     
                     t_pred = getattr(t, 'pred_id', None)
@@ -681,9 +676,6 @@ with tab3:
         st.write("### 3. Current Schedule")
         
         if st.session_state.tasks:
-            # -----------------------------------------
-            # DATA FRAME TABLE VIEW
-            # -----------------------------------------
             sched_list = []
             for t in st.session_state.tasks:
                 start_str = t.start_date.strftime('%d/%m/%Y')
@@ -706,9 +698,6 @@ with tab3:
             
             st.dataframe(pd.DataFrame(sched_list), hide_index=True, use_container_width=True)
             
-            # -----------------------------------------
-            # TASK DELETION & MANAGEMENT
-            # -----------------------------------------
             st.write("#### Manage Schedule")
             del_c1, del_c2, del_c3 = st.columns([2, 1, 1])
             
@@ -732,9 +721,6 @@ with tab3:
 
             st.divider()
             
-            # -----------------------------------------
-            # PLOTLY GANTT CHART
-            # -----------------------------------------
             st.write("### Project Gantt Chart")
             gantt_data = []
             for t in st.session_state.tasks:
@@ -742,7 +728,8 @@ with tab3:
                     gantt_data.append({
                         "Task": f"{t.task_id} - {t.activity.name}",
                         "Start": t.start_date,
-                        "Finish": t.end_date,
+                        # Add 1 day to finish strictly for the visual chart so 1-day tasks render visibly
+                        "Finish": t.end_date + datetime.timedelta(days=1), 
                         "Zone": t.zone.name
                     })
                     

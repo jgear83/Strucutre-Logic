@@ -50,22 +50,24 @@ def sidebar_project_controls():
     st.sidebar.write("Save or load your entire estimate.")
     
     # --- EXPORT PROJECT ---
-    # Create an Excel file in memory containing all current session state data
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        st.session_state.mat_rates.to_excel(writer, sheet_name='mat_rates', index=False)
-        st.session_state.lab_rates.to_excel(writer, sheet_name='lab_rates', index=False)
-        st.session_state.plant_rates.to_excel(writer, sheet_name='plant_rates', index=False)
-        st.session_state.wbs_df.to_excel(writer, sheet_name='wbs_df', index=False)
-        # Note: Future dataframes (like detailed_items) can simply be added here
-        
-    st.sidebar.download_button(
-        label="⬇️ Export Entire Project",
-        data=output.getvalue(),
-        file_name="estimating_project_export.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Downloads all current rates and WBS structures into a single Excel file."
-    )
+    try:
+        # Changed engine from xlsxwriter to openpyxl for better compatibility
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            st.session_state.mat_rates.to_excel(writer, sheet_name='mat_rates', index=False)
+            st.session_state.lab_rates.to_excel(writer, sheet_name='lab_rates', index=False)
+            st.session_state.plant_rates.to_excel(writer, sheet_name='plant_rates', index=False)
+            st.session_state.wbs_df.to_excel(writer, sheet_name='wbs_df', index=False)
+            
+        st.sidebar.download_button(
+            label="⬇️ Export Entire Project",
+            data=output.getvalue(),
+            file_name="estimating_project_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Downloads all current rates and WBS structures into a single Excel file."
+        )
+    except ModuleNotFoundError:
+        st.sidebar.error("⚠️ Export failed: Please add `openpyxl` to your requirements.txt file on Streamlit Cloud.")
     
     st.sidebar.divider()
     

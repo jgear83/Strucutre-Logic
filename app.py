@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # --- 1. SESSION STATE INITIALIZATION ---
-# Initialize separate dataframes for each resource type
+# Initialize all necessary dataframes in memory
 if 'mat_rates' not in st.session_state:
     st.session_state.mat_rates = pd.DataFrame()
 if 'lab_rates' not in st.session_state:
@@ -13,29 +13,23 @@ if 'wbs_df' not in st.session_state:
     st.session_state.wbs_df = pd.DataFrame(columns=['WBS_Code', 'WBS_Name'])
 
 
-# --- 2. THE UPLOAD HELPER FUNCTION ---
-# We write this once, and use it for all four uploads below.
+# --- 2. UPLOAD HELPER FUNCTION ---
 def process_upload(uploaded_file, expected_columns, state_key, success_name):
     """Reads the file, validates columns, and saves to session state."""
     try:
-        # Handle both CSV and Excel
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
             
-        # Validate columns
         missing_cols = [col for col in expected_columns if col not in df.columns]
         
         if not missing_cols:
-            # Clean data: drop empty rows based on the expected columns
             df = df.dropna(subset=expected_columns)
-            
-            # Save to the specific session state variable
             st.session_state[state_key] = df
-            
             st.success(f"✅ {success_name} uploaded successfully! ({len(df)} items loaded)")
-            with st.expander(f"Preview {success_name}"):
+            # Hide the data table inside an expander to keep the page clean
+            with st.expander(f"Preview {success_name} Data"):
                 st.dataframe(df, use_container_width=True)
         else:
             st.error(f"⚠️ Upload failed. Missing columns: {missing_cols}")
@@ -45,85 +39,105 @@ def process_upload(uploaded_file, expected_columns, state_key, success_name):
         st.error(f"An error occurred reading the file: {e}")
 
 
-# --- 3. PAGE 1: UPLOADS & SETUP ---
-def page_1_uploads():
-    st.header("Step 1: Project Setup & Uploads")
-    st.write("Upload your project WBS and schedule of rates to begin estimating.")
+# --- 3. PAGE DEFINITIONS ---
+
+def section_1_setup():
+    st.header("Section 1: Project Setup")
+    st.write("Upload your master rates and project structure to begin.")
+    
+    # 1. Materials Upload
+    st.subheader("1. Upload Material Rates")
+    mat_file = st.file_uploader("Upload Materials (CSV/Excel)", type=['csv', 'xlsx'], key="mat_up")
+    if mat_file:
+        process_upload(mat_file, ['Material_Code', 'Description', 'Unit', 'Unit_Rate'], 'mat_rates', "Material Rates")
     st.divider()
 
-    # Create 4 clean tabs for the user interface
-    tab1, tab2, tab3, tab4 = st.tabs(["🏗️ WBS", "🧱 Materials", "👷 Labour", "🚜 Plant & Equip"])
+    # 2. Labour Upload
+    st.subheader("2. Upload Labour Rates")
+    lab_file = st.file_uploader("Upload Labour (CSV/Excel)", type=['csv', 'xlsx'], key="lab_up")
+    if lab_file:
+        process_upload(lab_file, ['Trade_Code', 'Role_Description', 'Hourly_Rate'], 'lab_rates', "Labour Rates")
+    st.divider()
 
-    # --- TAB 1: WBS UPLOAD ---
-    with tab1:
-        st.subheader("Upload Work Breakdown Structure")
-        wbs_file = st.file_uploader("Upload WBS (CSV/Excel)", type=['csv', 'xlsx'], key="wbs_up")
-        
-        if wbs_file:
-            process_upload(
-                uploaded_file=wbs_file, 
-                expected_columns=['WBS_Code', 'WBS_Name'], 
-                state_key='wbs_df', 
-                success_name="WBS Structure"
-            )
+    # 3. Plant Upload
+    st.subheader("3. Upload Plant Hire Rates")
+    plant_file = st.file_uploader("Upload Plant (CSV/Excel)", type=['csv', 'xlsx'], key="plant_up")
+    if plant_file:
+        process_upload(plant_file, ['Plant_Code', 'Equipment_Description', 'Hourly_Rate'], 'plant_rates', "Plant Rates")
+    st.divider()
+
+    # 4. WBS Upload
+    st.subheader("4. Upload Work Breakdown Structure")
+    wbs_file = st.file_uploader("Upload WBS (CSV/Excel)", type=['csv', 'xlsx'], key="wbs_up")
+    if wbs_file:
+        process_upload(wbs_file, ['WBS_Code', 'WBS_Name'], 'wbs_df', "WBS Structure")
+
+
+def section_2_wbs():
+    st.header("Section 2: Work Breakdown Structure (WBS)")
+    st.write("Review, edit, or manually add your high-level work areas.")
+    
+    # Manual WBS Entry Form
+    with st.form("manual_wbs_form", clear_on_submit=True):
+        st.subheader("Add WBS Item Manually")
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            w_code = st.text_input("WBS Code (e.g., 001)")
+        with col2:
+            w_name = st.text_input("WBS Description (e.g., Substructure)")
             
-        # Optional: Keep the manual entry option below the upload just in case
-        with st.expander("Or Add WBS Manually"):
-             with st.form("manual_wbs", clear_on_submit=True):
-                 col1, col2 = st.columns([1, 3])
-                 w_code = col1.text_input("WBS Code")
-                 w_name = col2.text_input("WBS Name")
-                 if st.form_submit_button("Add") and w_code and w_name:
-                     new_row = pd.DataFrame([{'WBS_Code': w_code, 'WBS_Name': w_name}])
-                     st.session_state.wbs_df = pd.concat([st.session_state.wbs_df, new_row], ignore_index=True).drop_duplicates(subset=['WBS_Code'])
-                     st.success("Added!")
+        if st.form_submit_button("Add Item") and w_code and w_name:
+            if w_code in st.session_state.wbs_df['WBS_Code'].values:
+                st.error(f"Code '{w_code}' already exists.")
+            else:
+                new_row = pd.DataFrame([{'WBS_Code': w_code, 'WBS_Name': w_name}])
+                st.session_state.wbs_df = pd.concat([st.session_state.wbs_df, new_row], ignore_index=True)
+                st.success(f"Added {w_code} - {w_name}")
+                
+    st.divider()
+    
+    # Editable WBS Viewer
+    st.subheader("Current WBS")
+    if not st.session_state.wbs_df.empty:
+        st.session_state.wbs_df = st.data_editor(
+            st.session_state.wbs_df, 
+            use_container_width=True, 
+            num_rows="dynamic",
+            key="wbs_editor"
+        )
+    else:
+        st.info("No WBS items found. Please upload via Section 1 or add manually above.")
 
-    # --- TAB 2: MATERIALS UPLOAD ---
-    with tab2:
-        st.subheader("Upload Material Rates")
-        mat_file = st.file_uploader("Upload Materials (CSV/Excel)", type=['csv', 'xlsx'], key="mat_up")
-        
-        if mat_file:
-            process_upload(
-                uploaded_file=mat_file, 
-                # Defined the structure typical for materials
-                expected_columns=['Material_Code', 'Description', 'Unit', 'Unit_Rate'], 
-                state_key='mat_rates', 
-                success_name="Material Rates"
-            )
 
-    # --- TAB 3: LABOUR UPLOAD ---
-    with tab3:
-        st.subheader("Upload Labour Rates")
-        lab_file = st.file_uploader("Upload Labour (CSV/Excel)", type=['csv', 'xlsx'], key="lab_up")
-        
-        if lab_file:
-            process_upload(
-                uploaded_file=lab_file, 
-                # Defined the structure typical for trades/labour
-                expected_columns=['Trade_Code', 'Role_Description', 'Hourly_Rate'], 
-                state_key='lab_rates', 
-                success_name="Labour Rates"
-            )
+def section_3_detail_quantities():
+    st.header("Section 3: Detail Quantities")
+    st.info("Logic for detailing sub-items and quantifying materials will go here.")
 
-    # --- TAB 4: PLANT UPLOAD ---
-    with tab4:
-        st.subheader("Upload Plant & Equipment Rates")
-        plant_file = st.file_uploader("Upload Plant (CSV/Excel)", type=['csv', 'xlsx'], key="plant_up")
-        
-        if plant_file:
-            process_upload(
-                uploaded_file=plant_file, 
-                # Defined the structure typical for machinery
-                expected_columns=['Plant_Code', 'Equipment_Description', 'Hourly_Rate'], 
-                state_key='plant_rates', 
-                success_name="Plant Rates"
-            )
+
+def section_4_rate_quantities():
+    st.header("Section 4: Rate Quantities")
+    st.info("Logic for applying material rates to the detailed quantities will go here.")
+
+
+def section_5_apply_labour_plant():
+    st.header("Section 5: Apply Labour and Plant")
+    st.info("Logic for allocating hours and machinery to WBS items will go here.")
+
+
+def section_6_analysis():
+    st.header("Section 6: Analysis")
+    st.info("Dashboard, total BOQ, and productivity metrics will go here.")
+
 
 # --- 4. NAVIGATION ROUTING ---
+# This automatically generates the sidebar menu
 pg = st.navigation([
-    st.Page(page_1_uploads, title="1. Setup & Uploads", icon="⚙️"),
-    # st.Page(page_2_detail, title="2. Detail BOQ", icon="📋") # Ready for the next step
+    st.Page(section_1_setup, title="Section 1. Project Setup", icon="⚙️"),
+    st.Page(section_2_wbs, title="Section 2. WBS", icon="🏗️"),
+    st.Page(section_3_detail_quantities, title="Section 3. Detail Quantities", icon="📏"),
+    st.Page(section_4_rate_quantities, title="Section 4. Rate Quantities", icon="💲"),
+    st.Page(section_5_apply_labour_plant, title="Section 5. Apply Labour and Plant", icon="👷"),
+    st.Page(section_6_analysis, title="Section 6. Analysis", icon="📊")
 ])
 
 pg.run()
